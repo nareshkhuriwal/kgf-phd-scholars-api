@@ -35,6 +35,12 @@ class PaperController extends Controller
         return PaperResource::collection($p);
     }
 
+    public function show(Paper $paper)
+    {
+        $paper->load('files');
+        return new PaperResource($paper);
+    }
+
     public function store(PaperRequest $req)
     {
         $userId = $req->user()->id ?? null;
@@ -58,12 +64,6 @@ class PaperController extends Controller
             ->setStatusCode(201);
     }
 
-    public function show(Paper $paper)
-    {
-        $paper->load('files');
-        return new PaperResource($paper);
-    }
-
     public function update(PaperRequest $req, Paper $paper)
     {
         $userId = $req->user()->id ?? null;
@@ -84,30 +84,84 @@ class PaperController extends Controller
 
     public function destroy(Paper $paper)
     {
-        $paper->delete();
-        return response()->json(['ok' => true]);
+        $attempts = 0;
+        $max = 3;
+
+        while (true) {
+            try {
+                DB::transaction(function () use ($paper) {
+                    $paper->load('files');
+
+                    // Delete blobs first (ignore if already gone)
+                    foreach ($paper->files as $file) {
+                        $disk = $file->disk ?: 'public';
+                        $path = $file->path;
+                        try {
+                            Storage::disk($disk)->delete($path);
+                        } catch (\Throwable $e) {
+                            // swallow filesystem errors (file might already be removed)
+                        }
+                        $file->delete();
+                    }
+
+                    // Finally delete the paper row
+                    $paper->delete();
+                });
+
+                return response()->json(['ok' => true]);
+            } catch (QueryException $e) {
+                $attempts++;
+                // Handle MySQL “Prepared statement needs to be re-prepared” (HY000/1615) on shared hosting
+                if ($attempts < $max && str_contains($e->getMessage(), '1615')) {
+                    usleep(150000); // 150ms backoff
+                    continue;
+                }
+                throw $e;
+            }
+        }
     }
 
     public function bulkDestroy(BulkDeletePapersRequest $req)
     {
         $ids = $req->validated()['ids'];
 
-        DB::transaction(function () use ($ids) {
-            $papers = Paper::with('files')->whereIn('id', $ids)->get();
+        $attempts = 0;
+        $max = 3;
 
-            foreach ($papers as $paper) {
-                foreach ($paper->files as $file) {
-                    // ignore failures if already removed
-                    Storage::disk($file->disk ?: 'public')->delete($file->path);
-                    $file->delete();
+        while (true) {
+            try {
+                DB::transaction(function () use ($ids) {
+                    $papers = Paper::with('files')->whereIn('id', $ids)->get();
+
+                    foreach ($papers as $paper) {
+                        foreach ($paper->files as $file) {
+                            $disk = $file->disk ?: 'public';
+                            $path = $file->path;
+                            try {
+                                Storage::disk($disk)->delete($path);
+                            } catch (\Throwable $e) {
+                                // ignore blob delete errors
+                            }
+                            $file->delete();
+                        }
+                    }
+
+                    // Delete papers at the end (FKs may cascade other relations)
+                    Paper::whereIn('id', $ids)->delete();
+                });
+
+                return response()->json(['ok' => true, 'deleted' => $ids]);
+            } catch (QueryException $e) {
+                $attempts++;
+                if ($attempts < $max && str_contains($e->getMessage(), '1615')) {
+                    usleep(150000);
+                    continue;
                 }
+                throw $e;
             }
-
-            Paper::whereIn('id', $ids)->delete();
-        });
-
-        return response()->json(['ok' => true, 'deleted' => $ids]);
+        }
     }
+
 
     /**
      * Save an uploaded file to storage and create the paper_files row.

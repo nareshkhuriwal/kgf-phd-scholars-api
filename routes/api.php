@@ -104,29 +104,37 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::put('/reviews/{paper}/sections', [ReviewController::class, 'updateSection']);
     Route::put('/reviews/{paper}/status', [ReviewController::class, 'updateStatus']); // NEW
 
-    Route::prefix('reports')->group(function () {
         // Lists used by the UI
-        Route::get('/rol',        [ReportController::class, 'rol']);           // already had
-        Route::get('/literature', [ReportController::class, 'literature']);    // new
-        Route::get('/users',      [UserController::class, 'options']);         // for multi-select
-        Route::get('/chapters',   [ChapterController::class, 'index']);        // for multi-select
+        Route::get('/reports/rol',        [ReportController::class, 'rol']);           // already had
+        Route::get('/reports/literature', [ReportController::class, 'literature']);    // new
+        Route::get('/reports/users',      [UserController::class, 'options']);         // for multi-select
+        Route::get('/reports/chapters',   [ChapterController::class, 'index']);        // for multi-select
 
         // Builder (adhoc)
-        Route::post('/preview',   [ReportController::class, 'preview']);
-        Route::post('/generate',  [ReportController::class, 'generate']);
-        Route::post('/bulk-export', [ReportController::class, 'bulkExport']);
+        Route::post('/reports/preview',   [ReportController::class, 'preview']);
+        Route::post('/reports/generate',  [ReportController::class, 'generate']);
+        Route::post('/reports/bulk-export', [ReportController::class, 'bulkExport']);
 
         // Saved report configs
-        Route::get('/saved',            [SavedReportController::class, 'index']);
-        Route::post('/saved',           [SavedReportController::class, 'store']);
-        Route::get('/saved/{id}',       [SavedReportController::class, 'show']);
-        Route::put('/saved/{id}',       [SavedReportController::class, 'update']);
-        Route::delete('/saved/{id}',    [SavedReportController::class, 'destroy']);
-        Route::post('/saved/{id}/preview',  [ReportController::class, 'preview']);
-        Route::post('/saved/{id}/generate', [ReportController::class, 'generate']);
-        Route::post('/saved/bulk-delete', [SavedReportController::class, 'bulkDestroy']); // optional
+        Route::get('/reports/saved',            [SavedReportController::class, 'index']);
+        Route::post('/reports/saved',           [SavedReportController::class, 'store']);
 
-    });
+        Route::post('/debug/echo', function (\Illuminate\Http\Request $r) {
+            \Illuminate\Support\Facades\Log::debug('[DEBUG/ECHO] request all()', $r->all());
+            return response()->json([
+                'all' => $r->all(),
+                'headers' => [
+                    'Content-Type' => $r->header('Content-Type'),
+                    'Accept'       => $r->header('Accept'),
+                ],
+            ]);
+        });
 
+        Route::get('/reports/saved/{id}',       [SavedReportController::class, 'show']);
+        Route::put('/reports/saved/{id}',       [SavedReportController::class, 'update']);
+        Route::delete('/reports/saved/{id}',    [SavedReportController::class, 'destroy']);
+        Route::post('/reports/saved/{id}/preview',  [ReportController::class, 'preview']);
+        Route::post('/reports/saved/{id}/generate', [ReportController::class, 'generate']);
+        Route::post('/reports/saved/bulk-delete', [SavedReportController::class, 'bulkDestroy']); // optional
 
 });

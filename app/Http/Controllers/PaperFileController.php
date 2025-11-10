@@ -9,16 +9,18 @@ use Illuminate\Support\Facades\Storage;
 
 class PaperFileController extends Controller
 {
+    
     public function upload(Request $req, Paper $paper) {
         $req->validate([
-            'file' => ['required','file','mimes:pdf,doc,docx','max:51200'] // 50MB
+            'file' => ['required','file','mimes:pdf,doc,docx','max:51200']
         ]);
-
+    
         $file = $req->file('file');
-        $disk = 'public'; // ensure public disk for web access
-        $subdir = now()->format('Y/m');
-        $path = $file->store("library/{$subdir}", $disk);
-
+    
+        $disk = 'uploads'; // <— cPanel-safe public/uploads
+        $sub  = now()->format('Y/m');
+        $path = $file->store("papers/{$sub}", $disk);
+    
         $pf = $paper->files()->create([
             'disk'          => $disk,
             'path'          => $path,
@@ -28,15 +30,14 @@ class PaperFileController extends Controller
             'checksum'      => hash_file('sha256', $file->getRealPath()),
             'uploaded_by'   => $req->user()->id ?? null,
         ]);
-
+    
         return response()->json([
             'id'            => $pf->id,
-            'url'           => Storage::disk($pf->disk)->url($pf->path),
+            'url'           => \Storage::disk($disk)->url($path),
             'original_name' => $pf->original_name,
-            'mime'          => $pf->mime,
-            'size_bytes'    => $pf->size_bytes,
         ], 201);
     }
+
 
     public function destroy(Paper $paper, PaperFile $file) {
         if ($file->paper_id !== $paper->id) abort(404);

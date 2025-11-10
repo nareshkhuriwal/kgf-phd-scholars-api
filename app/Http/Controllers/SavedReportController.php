@@ -3,9 +3,11 @@
 namespace App\Http\Controllers;
 
 use App\Models\SavedReport;
-use Illuminate\Http\Request;
 use App\Http\Requests\SavedReportRequest;
 use App\Http\Requests\BulkDeleteSavedReportsRequest;
+use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Log;
+
 
 class SavedReportController extends Controller
 {
@@ -32,33 +34,42 @@ class SavedReportController extends Controller
         return response()->json($q->orderBy($sort,$dir)->paginate($per));
     }
 
-    // CREATE
-    public function store(SavedReportRequest $req)
-    {
-        $data = $req->validated();
-        $data['created_by'] = optional($req->user())->id;
-        $data['updated_by'] = optional($req->user())->id;
-
-        $row = SavedReport::create($data);
-        return response()->json($row, 201);
-    }
-
     // READ one
     public function show($id)
     {
         return response()->json(SavedReport::findOrFail($id));
     }
 
-    // UPDATE
+    public function store(SavedReportRequest $req)
+    {
+        Log::info('[SavedReportController@store] hit');
+        $data = $req->validated();
+        Log::debug('[SavedReportController@store] validated', $data);
+
+        $data['created_by'] = optional($req->user())->id;
+        $data['updated_by'] = optional($req->user())->id;
+
+        $row = SavedReport::create($data);
+        Log::info('[SavedReportController@store] created', ['id' => $row->id]);
+
+        return response()->json($row, 201);
+    }
+
     public function update(SavedReportRequest $req, $id)
     {
-        $row = SavedReport::findOrFail($id);
+        Log::info('[SavedReportController@update] hit', ['id' => $id]);
+        $row  = SavedReport::findOrFail($id);
         $data = $req->validated();
+        Log::debug('[SavedReportController@update] validated', $data);
+
         $data['updated_by'] = optional($req->user())->id;
 
         $row->update($data);
+        Log::info('[SavedReportController@update] updated', ['id' => $row->id]);
+
         return response()->json($row->refresh());
     }
+
 
     // DELETE one
     public function destroy($id)
