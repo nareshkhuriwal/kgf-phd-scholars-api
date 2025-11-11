@@ -12,6 +12,8 @@ class UserResource extends JsonResource
             'id'           => $this->id,
             'name'         => $this->name,
             'email'        => $this->email,
+            'phone'       => $this->phone,
+            'organization' => $this->organization,
             'role'         => $this->role ?? null,      // if you store a role
             'status'       => $this->status ?? null,    // e.g., active/inactive (optional)
             'created_at'   => optional($this->created_at)->toISOString(),

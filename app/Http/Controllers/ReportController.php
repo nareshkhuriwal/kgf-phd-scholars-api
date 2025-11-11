@@ -13,12 +13,12 @@ use Illuminate\Support\Facades\Storage;
 class ReportController extends Controller
 {
     /**
-     * ROL JSON source (kept for list/table pages)
+     * Quick JSON for ROL page (unchanged convenience endpoint)
      */
     public function rol(Request $request)
     {
         $rows = Paper::query()
-            ->select(['id','doi','authors','title','year','category_of_paper','key_issue'])
+            ->select(['id','doi','authors','title','year'])
             ->orderByDesc('created_at')
             ->get()
             ->map(function ($p) {
@@ -28,8 +28,8 @@ class ReportController extends Controller
                     'authors'  => $p->authors,
                     'title'    => $p->title,
                     'year'     => $p->year,
-                    'category' => $p->category_of_paper,
-                    'keyIssue' => $p->key_issue,
+                    'category' => Schema::hasColumn('papers','category') ? $p->category : null,
+                    'keyIssue' => method_exists($p, 'getAttribute') ? $p->getAttribute('key_issue') : null,
                 ];
             });
 
@@ -37,7 +37,7 @@ class ReportController extends Controller
     }
 
     /**
-     * Literature Reviews list (normalized field for the Literature page)
+     * Literature list for the page (unchanged)
      */
     public function literature(Request $request)
     {
@@ -57,190 +57,61 @@ class ReportController extends Controller
         return response()->json($rows);
     }
 
+    /* --------------------------- Utilities --------------------------- */
 
     private function labelToKey(string $label): string
     {
         $k = strtolower(trim($label));
         $k = preg_replace('/[^a-z0-9]+/i', '_', $k);
-        return trim($k, '_') ?: 'col';
-    }
-
-    private function cleanText(?string $htmlOrText): ?string
-    {
-        if ($htmlOrText === null) return null;
-        // strip tags but keep paragraph breaks somewhat
-        $text = preg_replace('/<\s*\/p\s*>/i', "\n\n", $htmlOrText);
-        $text = strip_tags($text);
-        // collapse whitespace
-        $text = preg_replace('/[ \t]+\n/', "\n", $text);
-        $text = preg_replace('/\n{3,}/', "\n\n", $text);
-        return trim($text);
+        $k = trim($k, '_');
+        return $k ?: 'col';
     }
 
     /**
-     * Build ROL dataset – (already in your file) …
-     * protected function buildRolDataset(...) { ... }
+     * Minimal HTML -> plain text cleaner for server payloads.
+     * - decode entities
+     * - normalize <br>/</p> to newlines
+     * - strip tags
+     * - collapse >2 newlines -> 2
      */
-
-    /**
-     * Build SYNOPSIS dataset:
-     *  - Pull latest DONE review per paper
-     *  - Extract ONLY "Litracture Review" text
-     *  - Pull requested chapter bodies
-     *
-     * Returns: [ 'literature' => [...], 'chapters' => [...] ]
-     */
-    protected function buildSynopsisDataset(array $filters, array $selections): array
+    private function cleanText(?string $html): string
     {
-        // ---- Literature Review items (latest DONE review per paper)
-        $latestDoneIds = DB::table('reviews')
-            ->selectRaw('MAX(id) AS id, paper_id')
-            ->where('status', 'done')
-            ->groupBy('paper_id');
+        if ($html === null) return '';
+        $s = (string)$html;
 
-        $q = DB::table('papers')
-            ->leftJoinSub($latestDoneIds, 'lr', 'lr.paper_id', '=', 'papers.id')
-            ->leftJoin('reviews as rv', 'rv.id', '=', 'lr.id')
-            ->select([
-                'papers.id as paper_id',
-                'papers.title',
-                'papers.authors',
-                'papers.year',
-                'rv.review_sections',
-            ])
-            ->orderByDesc('papers.id');
+        // normalize breaks
+        $s = preg_replace('/<\s*br\s*\/?>/i', "\n", $s);
+        $s = preg_replace('/<\/\s*p\s*>/i', "\n", $s);
+        $s = preg_replace('/<\s*p[^>]*>/i', '', $s);
 
-        if ($years = Arr::get($filters, 'years', [])) $q->whereIn('papers.year', $years);
-        // Add more optional filters later if you track area/venue/user
+        // decode entities (incl. &nbsp;)
+        $s = html_entity_decode($s, ENT_QUOTES | ENT_HTML5, 'UTF-8');
+        // convert 2+ NBSP to newline, single NBSP to space
+        $s = preg_replace('/\x{00A0}{2,}/u', "\n", $s);
+        $s = str_replace("\xC2\xA0", ' ', $s); // NBSP to space (utf-8 bytes)
 
-        $literature = [];
-        foreach ($q->get() as $rec) {
-            $sections = [];
-            if (!empty($rec->review_sections)) {
-                $sections = is_string($rec->review_sections)
-                    ? (json_decode($rec->review_sections, true) ?: [])
-                    : (array)$rec->review_sections;
-            }
-            $lit = Arr::get($sections, 'Litracture Review');
-            $lit = $this->cleanText(is_string($lit) ? $lit : (is_null($lit) ? null : json_encode($lit)));
-            if ($lit) {
-                $literature[] = [
-                    'paper_id' => $rec->paper_id,
-                    'title'    => $rec->title,
-                    'authors'  => $rec->authors,
-                    'year'     => $rec->year,
-                    'text'     => $lit,
-                ];
-            }
-        }
+        // strip residual tags
+        $s = strip_tags($s);
 
-        // ---- Chapters (IDs come from selections.chapters)
-        $chapterIds = array_values(array_filter((array) Arr::get($selections, 'chapters', [])));
-        $chapters = [];
-        if (!empty($chapterIds)) {
-            // Use DB directly to avoid model assumptions
-            $rows = DB::table('chapters')
-                ->select(['id','title','body_html'])
-                ->whereIn('id', $chapterIds)
-                ->orderByRaw("FIELD(id," . implode(',', array_map('intval',$chapterIds)) . ")") // preserve order
-                ->get();
+        // trim trailing spaces per line
+        $lines = array_map(fn($ln) => rtrim($ln, " \t"), explode("\n", $s));
+        $s = implode("\n", $lines);
 
-            foreach ($rows as $ch) {
-                $chapters[] = [
-                    'id'    => $ch->id,
-                    'title' => $ch->title,
-                    'body_html'  => $this->cleanText($ch->body_html),
-                ];
-            }
-        }
-
-        return [
-            'literature' => $literature, // [{paper_id,title,authors,year,text}]
-            'chapters'   => $chapters,   // [{id,title,body}]
-        ];
+        // collapse 3+ newlines to 2, trim
+        $s = preg_replace("/\n{3,}/", "\n\n", $s);
+        return trim($s);
     }
 
-    /* ------------------------------ preview ------------------------------ */
-
-    public function preview(Request $request)
-    {
-        $payload = $request->validate([
-            'name'       => 'nullable|string|max:255',
-            'template'   => 'required|string|in:synopsis,rol,final_thesis,presentation',
-            'format'     => 'nullable|string', // client decides renderer
-            'filters'    => 'required|array',
-            'selections' => 'required|array',
-            'options'    => 'sometimes|array',
-        ]);
-
-        $name     = trim($payload['name'] ?? 'Report Preview');
-        $template = strtolower($payload['template']);
-
-        if ($template === 'rol') {
-            // your existing ROL branch (unchanged) ...
-            [$columns, $rows] = $this->buildRolDataset(
-                $payload['filters'],
-                $payload['selections'],
-                Arr::get($payload, 'options', [])
-            );
-            $baseCount = 5 + (Schema::hasColumn('papers', 'category') ? 1 : 0);
-            $selectedSectionLabels = array_map(
-                fn($c) => $c['label'],
-                array_slice($columns, $baseCount)
-            );
-
-            return response()->json([
-                'name'     => $name,
-                'template' => 'rol',
-                'meta'     => [
-                    'totalPapers'      => (int) Paper::count(),
-                    'selectedSections' => $selectedSectionLabels,
-                ],
-                'columns'  => $columns,
-                'rows'     => $rows,
-            ]);
-        }
-
-        if ($template === 'synopsis') {
-            $data = $this->buildSynopsisDataset($payload['filters'], $payload['selections']);
-            return response()->json([
-                'name'      => $name ?: 'Synopsis Report',
-                'template'  => 'synopsis',
-                'outline'   => array_values(Arr::get($payload, 'selections.includeOrder', [])), // you’re sending this
-                'kpis'      => [
-                    ['label' => 'Total Papers', 'value' => (string) Paper::count()],
-                    ['label' => 'Chapters',     'value' => (string) count(Arr::get($payload, 'selections.chapters', []))],
-                ],
-                'literature'=> $data['literature'],
-                'chapters'  => $data['chapters'],
-            ]);
-        }
-
-        // other templates (placeholder)
-        return response()->json([
-            'name'     => $name,
-            'template' => $template,
-            'outline'  => array_values(Arr::get($payload, 'selections.includeOrder', [])),
-            'kpis'     => [
-                ['label' => 'Total Papers', 'value' => (string) Paper::count()],
-                ['label' => 'Chapters',     'value' => (string) count(Arr::get($payload, 'selections.chapters', []))],
-            ],
-        ]);
-    }
+    /* --------------------------- Builders --------------------------- */
 
     /**
-     * Build ROL dataset (columns + rows) using latest DONE review per paper.
-     * Returns [columns[], rows[]], where:
-     *   columns = [{ key, label }, ...]
-     *   rows    = [{ key => value, ... }, ...]
-     *
-     * $opts['keepHtml'] (bool) — if true, keeps HTML from review sections.
+     * Build ROL dataset (columns + rows) from latest DONE review per paper.
+     * $opts['keepHtml'] true to keep HTML in section values.
      */
     protected function buildRolDataset(array $filters, array $selections, array $opts = []): array
     {
         $keepHtml = (bool)($opts['keepHtml'] ?? false);
 
-        // UI labels (match keys inside reviews.review_sections JSON)
         $sectionLabels = [
             'Litracture Review',
             'Key Issue',
@@ -255,7 +126,6 @@ class ReportController extends Controller
             'Remarks',
         ];
 
-        // Base fields from papers (always included)
         $baseCols = [
             'Paper ID' => 'id',
             'DOI'      => 'doi',
@@ -263,23 +133,19 @@ class ReportController extends Controller
             'Title'    => 'title',
             'Year'     => 'year',
         ];
-        // Include category if it exists in your schema
         if (Schema::hasColumn('papers', 'category')) {
             $baseCols['Category'] = 'category';
         }
 
-        // Which sections user checked (preserve includeOrder)
         $include      = Arr::get($selections, 'include', []);
         $includeOrder = Arr::get($selections, 'includeOrder', $sectionLabels);
 
         $selectedLabels = [];
         foreach ($includeOrder as $label) {
-            if (!empty($include[$label])) {
-                $selectedLabels[] = $label;
-            }
+            if (!empty($include[$label])) $selectedLabels[] = $label;
         }
 
-        // Final columns: base + selected sections
+        // columns
         $columns = [];
         foreach ($baseCols as $label => $colname) {
             $columns[] = ['key' => $this->labelToKey($label), 'label' => $label];
@@ -288,7 +154,7 @@ class ReportController extends Controller
             $columns[] = ['key' => $this->labelToKey($label), 'label' => $label];
         }
 
-        // ---- Query latest DONE review per paper ----
+        // query latest DONE review per paper
         $latestDoneIds = DB::table('reviews')
             ->selectRaw('MAX(id) AS id, paper_id')
             ->where('status', 'done')
@@ -308,24 +174,17 @@ class ReportController extends Controller
             ])
             ->orderByDesc('papers.id');
 
-        // Optional filters
         if ($years = Arr::get($filters, 'years', [])) {
             $q->whereIn('papers.year', $years);
         }
-        // Uncomment/adapt if you later add these:
-        // if ($areas = Arr::get($filters, 'areas', []))   { $q->whereIn('papers.area', $areas); }
-        // if ($venues = Arr::get($filters, 'venues', [])) { $q->whereIn('papers.venue', $venues); }
-        // if ($uids = Arr::get($filters, 'userIds', []))  { $q->whereIn('rv.user_id', $uids); }
 
         $rows = [];
         foreach ($q->get() as $rec) {
-            // base fields
             $row = [];
             foreach ($baseCols as $label => $colname) {
                 $row[$this->labelToKey($label)] = $rec->{$colname} ?? null;
             }
 
-            // section values from JSON
             $sections = [];
             if (!empty($rec->review_sections)) {
                 $sections = is_string($rec->review_sections)
@@ -335,24 +194,19 @@ class ReportController extends Controller
 
             foreach ($selectedLabels as $label) {
                 $val = Arr::get($sections, $label);
-                if (!$keepHtml && is_string($val)) {
-                    $val = trim(strip_tags($val));
-                }
+                if (!$keepHtml && is_string($val)) $val = $this->cleanText($val);
                 $row[$this->labelToKey($label)] = $val;
             }
 
             $rows[] = $row;
         }
 
-        // Keep only rows with at least one selected section filled ("review completed")
+        // filter to rows with at least one selected section present
         if (count($selectedLabels) > 0) {
             $selectedKeys = array_map(fn($lab) => $this->labelToKey($lab), $selectedLabels);
-
             $rows = array_values(array_filter($rows, function ($r) use ($selectedKeys) {
                 foreach ($selectedKeys as $k) {
-                    if (array_key_exists($k, $r) && $r[$k] !== null && $r[$k] !== '') {
-                        return true;
-                    }
+                    if (array_key_exists($k, $r) && $r[$k] !== null && $r[$k] !== '') return true;
                 }
                 return false;
             }));
@@ -362,113 +216,207 @@ class ReportController extends Controller
     }
 
     /**
-     * PREVIEW — returns DATA ONLY (React renders & exports).
+     * Build SYNOPSIS-like dataset:
+     *  - Literature: latest DONE review's "Litracture Review"
+     *  - Chapters:   body_html from chapters table, in requested order
+     */
+    protected function buildSynopsisDataset(array $filters, array $selections): array
+    {
+        // latest DONE review per paper
+        $latestDoneIds = DB::table('reviews')
+            ->selectRaw('MAX(id) AS id, paper_id')
+            ->where('status', 'done')
+            ->groupBy('paper_id');
+
+        $q = DB::table('papers')
+            ->leftJoinSub($latestDoneIds, 'lr', 'lr.paper_id', '=', 'papers.id')
+            ->leftJoin('reviews as rv', 'rv.id', '=', 'lr.id')
+            ->select([
+                'papers.id as paper_id',
+                'papers.title',
+                'papers.authors',
+                'papers.year',
+                'rv.review_sections',
+            ])
+            ->orderByDesc('papers.id');
+
+        if ($years = Arr::get($filters, 'years', [])) $q->whereIn('papers.year', $years);
+
+        $literature = [];
+        foreach ($q->get() as $rec) {
+            $sections = [];
+            if (!empty($rec->review_sections)) {
+                $sections = is_string($rec->review_sections)
+                    ? (json_decode($rec->review_sections, true) ?: [])
+                    : (array)$rec->review_sections;
+            }
+            $lit = Arr::get($sections, 'Litracture Review');
+            $lit = is_string($lit) ? $this->cleanText($lit) : (is_null($lit) ? null : $this->cleanText(json_encode($lit)));
+
+            if ($lit) {
+                $literature[] = [
+                    'paper_id' => $rec->paper_id,
+                    'title'    => $rec->title,
+                    'authors'  => $rec->authors,
+                    'year'     => $rec->year,
+                    'text'     => $lit,
+                ];
+            }
+        }
+
+        // chapters in requested order
+        $chapterIds = array_values(array_filter((array) Arr::get($selections, 'chapters', [])));
+        $chapters = [];
+        if (!empty($chapterIds)) {
+            $rows = DB::table('chapters')
+                ->select(['id','title','body_html'])
+                ->whereIn('id', $chapterIds)
+                ->orderByRaw("FIELD(id," . implode(',', array_map('intval',$chapterIds)) . ")")
+                ->get();
+
+            foreach ($rows as $ch) {
+                $chapters[] = [
+                    'id'        => $ch->id,
+                    'title'     => $ch->title,
+                    'body_html' => $this->cleanText($ch->body_html),
+                ];
+            }
+        }
+
+        return ['literature' => $literature, 'chapters' => $chapters];
+    }
+
+    /* --------------------------- Selection-driven PREVIEW --------------------------- */
+
+    /**
+     * PREVIEW — selection-driven response.
+     *
      * Request:
      *  - name? string
-     *  - template: 'rol' | 'synopsis' | 'final_thesis' | 'presentation'
-     *  - format? string (ignored by server here)
-     *  - filters: {...}
+     *  - template? string  (ignored for dataset composition)
+     *  - format? string    (ignored for dataset composition; client renders)
+     *  - filters: array
      *  - selections: { include, includeOrder, chapters? }
-     *  - options.keepHtml? boolean
+     *  - options.keepHtml? boolean (only affects ROL sections)
      *
-     * Response (ROL):
+     * Response always includes:
      *  {
      *    name, template,
-     *    meta: { totalPapers, selectedSections },
-     *    columns: [{key,label},...],
-     *    rows: [{key:value,...},...]
+     *    meta: { totalPapers, selectedSections, chapterCount },
+     *    // present only if requested:
+     *    columns, rows,            // ROL dataset
+     *    literature, chapters      // Synopsis-like dataset
      *  }
      */
-    public function preview_excel(Request $request)
+    public function preview(Request $request)
     {
         $payload = $request->validate([
             'name'       => 'nullable|string|max:255',
-            'template'   => 'required|string|in:synopsis,rol,final_thesis,presentation',
-            'format'     => 'nullable|string', // ignored here
+            'template'   => 'nullable|string',   // no longer decisive
+            'format'     => 'nullable|string',   // no longer decisive
             'filters'    => 'required|array',
             'selections' => 'required|array',
             'options'    => 'sometimes|array',
             'options.keepHtml' => 'sometimes|boolean',
         ]);
 
-        $name     = trim($payload['name'] ?? 'Report Preview');
-        $template = strtolower($payload['template']);
+        $name       = trim($payload['name'] ?? 'Report Preview');
+        $template   = strtolower((string) ($payload['template'] ?? 'custom'));
+        $filters    = $payload['filters'];
+        $selections = $payload['selections'];
+        $options    = Arr::get($payload, 'options', []);
 
-        if ($template === 'rol') {
-            [$columns, $rows] = $this->buildRolDataset(
-                $payload['filters'],
-                $payload['selections'],
-                Arr::get($payload, 'options', [])
-            );
+        // Determine requested blocks
+        $include      = Arr::get($selections, 'include', []);
+        $includeOrder = Arr::get($selections, 'includeOrder', []);
+        $chaptersSel  = (array) Arr::get($selections, 'chapters', []);
 
-            // Selected section labels (after base columns)
+        $hasROL       = !!array_filter($include, fn($v) => (bool)$v === true);
+        $hasChapters  = count($chaptersSel) > 0;
+
+        $resp = [
+            'name'     => $name,
+            'template' => $template,
+            'meta'     => [
+                'totalPapers'  => (int) Paper::count(),
+                'selectedSections' => [], // filled below if ROL requested
+                'chapterCount' => (int) count($chaptersSel),
+            ],
+        ];
+
+        // ROL block (if any section checked)
+        if ($hasROL) {
+            [$columns, $rows] = $this->buildRolDataset($filters, $selections, $options);
+
+            // derive human labels for selected sections (after base columns)
             $baseCount = 5 + (Schema::hasColumn('papers', 'category') ? 1 : 0);
             $selectedSectionLabels = array_map(
                 fn($c) => $c['label'],
                 array_slice($columns, $baseCount)
             );
 
-            return response()->json([
-                'name'     => $name,
-                'template' => 'rol',
-                'meta'     => [
-                    'totalPapers'      => (int) Paper::count(),
-                    'selectedSections' => $selectedSectionLabels,
-                ],
-                'columns'  => $columns,
-                'rows'     => $rows,
-            ]);
+            $resp['meta']['selectedSections'] = $selectedSectionLabels;
+            $resp['columns'] = $columns;
+            $resp['rows']    = $rows;
         }
 
-        // Lightweight placeholders for other templates — extend later as needed
-        return response()->json([
-            'name'     => $name,
-            'template' => $template,
-            'outline'  => array_values(Arr::get($payload, 'selections.includeOrder', [])),
-            'kpis'     => [
-                ['label' => 'Total Papers', 'value' => (string) Paper::count()],
-                ['label' => 'Chapters',     'value' => (string) count(Arr::get($payload, 'selections.chapters', []))],
-            ],
-        ]);
+        // Synopsis-like block (if chapters requested)
+        if ($hasChapters) {
+            $syn = $this->buildSynopsisDataset($filters, $selections);
+            $resp['literature'] = $syn['literature']; // [{paper_id,title,authors,year,text}]
+            $resp['chapters']   = $syn['chapters'];   // [{id,title,body_html}]
+        }
+
+        // If neither selected, still send outline/kpis for UI (optional)
+        if (!$hasROL && !$hasChapters) {
+            $resp['outline'] = array_values($includeOrder);
+            $resp['kpis'] = [
+                ['label' => 'Total Papers', 'value' => (string) $resp['meta']['totalPapers']],
+                ['label' => 'Chapters',     'value' => '0'],
+            ];
+        }
+
+        return response()->json($resp);
     }
 
+    /* --------------------------- Generate (stub) --------------------------- */
 
     public function generate(Request $request)
     {
         $payload = $request->validate([
-            'template'   => 'required|string|in:synopsis,rol,final_thesis,presentation',
+            'template'   => 'nullable|string',
             'format'     => 'required|string|in:pdf,docx,xlsx,pptx',
             'filename'   => 'nullable|string|max:255',
             'filters'    => 'required|array',
             'selections' => 'required|array',
+            'options'    => 'sometimes|array',
         ]);
 
         $format   = strtolower($payload['format']);
         $filename = preg_replace('/[^A-Za-z0-9._-]+/', '_', $payload['filename'] ?? 'report') . ".{$format}";
-        $disk     = 'uploads'; // <-- changed
+        $disk     = 'uploads';
         $dir      = 'reports/' . now()->format('Y/m');
 
         Storage::disk($disk)->makeDirectory($dir);
         $path = "{$dir}/{$filename}";
 
-        $outline = array_values(Arr::get($payload, 'selections.includeOrder', []));
-        $content = "Template: {$payload['template']}\n"
-                . "Format: {$format}\n"
-                . "Outline: " . implode(', ', $outline) . "\n";
-
-        Storage::disk($disk)->put($path, $content);
+        // For now just store a small summary. Client still renders.
+        $summary = [
+            'format'     => $format,
+            'selections' => $payload['selections'],
+            'generatedAt'=> now()->toDateTimeString(),
+        ];
+        Storage::disk($disk)->put($path, json_encode($summary, JSON_PRETTY_PRINT));
 
         return response()->json([
             'disk'        => $disk,
             'path'        => $path,
-            'downloadUrl' => Storage::disk($disk)->url($path), // public URL
+            'downloadUrl' => Storage::disk($disk)->url($path),
         ]);
     }
 
+    /* --------------------------- Bulk export (unchanged stub) --------------------------- */
 
-    /**
-     * Bulk export (stub)
-     */
     public function bulkExport(Request $request)
     {
         $payload = $request->validate([

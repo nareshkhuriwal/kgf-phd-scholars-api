@@ -8,27 +8,36 @@ use App\Http\Controllers\CollectionController;
 use App\Http\Controllers\ChapterController;
 use App\Http\Controllers\ROLController;
 use App\Http\Controllers\LibraryImportController;
-
 use App\Http\Controllers\Reviews\ReviewQueueController;
 use App\Http\Controllers\Reviews\ReviewController;
 use App\Http\Controllers\PaperCommentController;
 use App\Http\Controllers\DashboardController;
 use App\Http\Controllers\UserController;
-
+use App\Http\Controllers\SettingsController;
 use App\Http\Controllers\ReportController;
 use App\Http\Controllers\SavedReportController;
+use App\Http\Controllers\ProfileController;
+
 
 // Public or rate-limited auth endpoints
 Route::post('/auth/login', [AuthController::class, 'login']);
+Route::post('/auth/register', [AuthController::class, 'register']);   // public
 
 Route::middleware('auth:sanctum')->group(function () {
     Route::get('/auth/me', [AuthController::class, 'me']);
     Route::post('/auth/logout', [AuthController::class, 'logout']);
 
+    Route::put('/profile/me', [ProfileController::class, 'update']);          // update profile
+    Route::patch('/profile/me', [ProfileController::class, 'update']);        // partial update
+
     // Full list for tables
     Route::get('/users', [UserController::class, 'index']);
     // Lightweight dropdown for Reports builder
     Route::get('/reports/users', [UserController::class, 'options']);
+
+    Route::get('/settings',  [SettingsController::class, 'show']);
+    Route::put('/settings',  [SettingsController::class, 'update']);
+
 
 
     Route::get('/dashboard/summary', [DashboardController::class, 'summary']);
