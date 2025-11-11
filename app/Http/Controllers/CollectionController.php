@@ -11,9 +11,12 @@ use App\Models\CollectionItem;
 use App\Models\Paper;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use App\Http\Controllers\Concerns\OwnerAuthorizes;
 
 class CollectionController extends Controller
 {
+    use OwnerAuthorizes;
+
     /** GET /api/collections?search=&per_page=25 */
     public function index(Request $req)
     {
@@ -177,8 +180,4 @@ public function papers(Request $req, Collection $collection)
         return response()->json(['ok' => true]);
     }
 
-    protected function authorizeOwner(Collection $c): void
-    {
-        if (auth()->id() !== $c->user_id) abort(403, 'Forbidden');
-    }
 }

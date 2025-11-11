@@ -8,9 +8,12 @@ use App\Models\ChapterItem;
 use App\Models\Paper;
 use Illuminate\Http\Request;
 use App\Http\Resources\ChapterOptionResource;
+use App\Http\Controllers\Concerns\OwnerAuthorizes;
 
 class ChapterController extends Controller
 {
+    use OwnerAuthorizes;
+
     public function index(Request $req) {
         $q = Chapter::query()->where('user_id',$req->user()->id)->withCount('items');
         if ($cid = $req->get('collection_id')) $q->where('collection_id',$cid);
@@ -91,7 +94,4 @@ class ChapterController extends Controller
         return ['ok'=>true];
     }
 
-    protected function authorizeOwner(Chapter $c): void {
-        if (auth()->id() !== $c->user_id) abort(403,'Forbidden');
-    }
 }

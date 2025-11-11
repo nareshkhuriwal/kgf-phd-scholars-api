@@ -7,14 +7,17 @@ use App\Http\Requests\SavedReportRequest;
 use App\Http\Requests\BulkDeleteSavedReportsRequest;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Log;
-
+use App\Http\Controllers\Concerns\OwnerAuthorizes;
 
 class SavedReportController extends Controller
 {
-    // LIST with search + pagination
+    use OwnerAuthorizes;
+
+    // LIST with search + pagination (scoped to owner)
     public function index(Request $req)
     {
-        $q = SavedReport::query();
+        $q = SavedReport::query()
+            ->where('created_by', $req->user()->id);
 
         if ($s = $req->get('search')) {
             $q->where(function ($w) use ($s) {
@@ -34,10 +37,13 @@ class SavedReportController extends Controller
         return response()->json($q->orderBy($sort,$dir)->paginate($per));
     }
 
-    // READ one
+    // READ one (owner-guarded)
     public function show($id)
     {
-        return response()->json(SavedReport::findOrFail($id));
+        $row = SavedReport::findOrFail($id);
+        $this->authorizeOwner($row, 'created_by');
+
+        return response()->json($row);
     }
 
     public function store(SavedReportRequest $req)
@@ -55,10 +61,14 @@ class SavedReportController extends Controller
         return response()->json($row, 201);
     }
 
+    // UPDATE (owner-guarded)
     public function update(SavedReportRequest $req, $id)
     {
         Log::info('[SavedReportController@update] hit', ['id' => $id]);
+
         $row  = SavedReport::findOrFail($id);
+        $this->authorizeOwner($row, 'created_by');
+
         $data = $req->validated();
         Log::debug('[SavedReportController@update] validated', $data);
 
@@ -70,20 +80,30 @@ class SavedReportController extends Controller
         return response()->json($row->refresh());
     }
 
-
-    // DELETE one
+    // DELETE one (owner-guarded)
     public function destroy($id)
     {
         $row = SavedReport::findOrFail($id);
+        $this->authorizeOwner($row, 'created_by');
+
         $row->delete();
         return response()->json(['ok' => true, 'deleted' => (int)$id]);
     }
 
-    // BULK DELETE (optional)
+    // BULK DELETE (owner-guarded per-id)
     public function bulkDestroy(BulkDeleteSavedReportsRequest $req)
     {
+        $userId = auth()->id();
         $ids = $req->validated()['ids'];
-        SavedReport::whereIn('id', $ids)->delete();
-        return response()->json(['ok'=>true,'deleted'=>$ids]);
+
+        // Delete only the current user's rows; ignore others silently
+        $ownedIds = SavedReport::whereIn('id', $ids)
+            ->where('created_by', $userId)
+            ->pluck('id')
+            ->all();
+
+        SavedReport::whereIn('id', $ownedIds)->delete();
+
+        return response()->json(['ok'=>true,'deleted'=>$ownedIds]);
     }
 }

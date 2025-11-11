@@ -9,16 +9,18 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Facades\Storage;
 
-
 class ReportController extends Controller
 {
     /**
-     * Quick JSON for ROL page (unchanged convenience endpoint)
+     * Quick JSON for ROL page (owner-scoped)
      */
     public function rol(Request $request)
     {
+        $uid = $request->user()->id ?? abort(401, 'Unauthenticated');
+
         $rows = Paper::query()
-            ->select(['id','doi','authors','title','year'])
+            ->select(['id','doi','authors','title','year', ...(Schema::hasColumn('papers','category') ? ['category'] : [])])
+            ->where('created_by', $uid)
             ->orderByDesc('created_at')
             ->get()
             ->map(function ($p) {
@@ -37,12 +39,15 @@ class ReportController extends Controller
     }
 
     /**
-     * Literature list for the page (unchanged)
+     * Literature list for the page (owner-scoped)
      */
     public function literature(Request $request)
     {
+        $uid = $request->user()->id ?? abort(401, 'Unauthenticated');
+
         $rows = Paper::query()
             ->select(['id','title','authors','year','literature_review'])
+            ->where('created_by', $uid)
             ->whereNotNull('literature_review')
             ->orderByDesc('id')
             ->get()
@@ -67,48 +72,32 @@ class ReportController extends Controller
         return $k ?: 'col';
     }
 
-    /**
-     * Minimal HTML -> plain text cleaner for server payloads.
-     * - decode entities
-     * - normalize <br>/</p> to newlines
-     * - strip tags
-     * - collapse >2 newlines -> 2
-     */
     private function cleanText(?string $html): string
     {
         if ($html === null) return '';
         $s = (string)$html;
 
-        // normalize breaks
         $s = preg_replace('/<\s*br\s*\/?>/i', "\n", $s);
         $s = preg_replace('/<\/\s*p\s*>/i', "\n", $s);
         $s = preg_replace('/<\s*p[^>]*>/i', '', $s);
 
-        // decode entities (incl. &nbsp;)
         $s = html_entity_decode($s, ENT_QUOTES | ENT_HTML5, 'UTF-8');
-        // convert 2+ NBSP to newline, single NBSP to space
         $s = preg_replace('/\x{00A0}{2,}/u', "\n", $s);
-        $s = str_replace("\xC2\xA0", ' ', $s); // NBSP to space (utf-8 bytes)
+        $s = str_replace("\xC2\xA0", ' ', $s);
 
-        // strip residual tags
-        $s = strip_tags($s);
-
-        // trim trailing spaces per line
         $lines = array_map(fn($ln) => rtrim($ln, " \t"), explode("\n", $s));
         $s = implode("\n", $lines);
 
-        // collapse 3+ newlines to 2, trim
         $s = preg_replace("/\n{3,}/", "\n\n", $s);
         return trim($s);
     }
 
-    /* --------------------------- Builders --------------------------- */
+    /* --------------------------- Builders (owner-scoped) --------------------------- */
 
     /**
-     * Build ROL dataset (columns + rows) from latest DONE review per paper.
-     * $opts['keepHtml'] true to keep HTML in section values.
+     * Build ROL dataset (columns + rows) from latest DONE review per paper for this user.
      */
-    protected function buildRolDataset(array $filters, array $selections, array $opts = []): array
+    protected function buildRolDataset(int $uid, array $filters, array $selections, array $opts = []): array
     {
         $keepHtml = (bool)($opts['keepHtml'] ?? false);
 
@@ -145,7 +134,6 @@ class ReportController extends Controller
             if (!empty($include[$label])) $selectedLabels[] = $label;
         }
 
-        // columns
         $columns = [];
         foreach ($baseCols as $label => $colname) {
             $columns[] = ['key' => $this->labelToKey($label), 'label' => $label];
@@ -154,15 +142,18 @@ class ReportController extends Controller
             $columns[] = ['key' => $this->labelToKey($label), 'label' => $label];
         }
 
-        // query latest DONE review per paper
+        // latest DONE review per paper (owner-scoped: papers.created_by = $uid and reviews.user_id = $uid)
         $latestDoneIds = DB::table('reviews')
             ->selectRaw('MAX(id) AS id, paper_id')
+            ->where('user_id', $uid)
             ->where('status', 'done')
             ->groupBy('paper_id');
 
         $q = DB::table('papers')
             ->leftJoinSub($latestDoneIds, 'lr', 'lr.paper_id', '=', 'papers.id')
-            ->leftJoin('reviews as rv', 'rv.id', '=', 'lr.id')
+            ->leftJoin('reviews as rv', function ($j) use ($uid) {
+                $j->on('rv.id', '=', 'lr.id')->where('rv.user_id', '=', $uid);
+            })
             ->select([
                 'papers.id',
                 'papers.doi',
@@ -172,6 +163,7 @@ class ReportController extends Controller
                 ...(Schema::hasColumn('papers', 'category') ? ['papers.category'] : []),
                 'rv.review_sections',
             ])
+            ->where('papers.created_by', $uid)
             ->orderByDesc('papers.id');
 
         if ($years = Arr::get($filters, 'years', [])) {
@@ -201,7 +193,6 @@ class ReportController extends Controller
             $rows[] = $row;
         }
 
-        // filter to rows with at least one selected section present
         if (count($selectedLabels) > 0) {
             $selectedKeys = array_map(fn($lab) => $this->labelToKey($lab), $selectedLabels);
             $rows = array_values(array_filter($rows, function ($r) use ($selectedKeys) {
@@ -216,21 +207,21 @@ class ReportController extends Controller
     }
 
     /**
-     * Build SYNOPSIS-like dataset:
-     *  - Literature: latest DONE review's "Litracture Review"
-     *  - Chapters:   body_html from chapters table, in requested order
+     * Build SYNOPSIS-like dataset for this user.
      */
-    protected function buildSynopsisDataset(array $filters, array $selections): array
+    protected function buildSynopsisDataset(int $uid, array $filters, array $selections): array
     {
-        // latest DONE review per paper
         $latestDoneIds = DB::table('reviews')
             ->selectRaw('MAX(id) AS id, paper_id')
+            ->where('user_id', $uid)
             ->where('status', 'done')
             ->groupBy('paper_id');
 
         $q = DB::table('papers')
             ->leftJoinSub($latestDoneIds, 'lr', 'lr.paper_id', '=', 'papers.id')
-            ->leftJoin('reviews as rv', 'rv.id', '=', 'lr.id')
+            ->leftJoin('reviews as rv', function ($j) use ($uid) {
+                $j->on('rv.id', '=', 'lr.id')->where('rv.user_id', '=', $uid);
+            })
             ->select([
                 'papers.id as paper_id',
                 'papers.title',
@@ -238,6 +229,7 @@ class ReportController extends Controller
                 'papers.year',
                 'rv.review_sections',
             ])
+            ->where('papers.created_by', $uid)
             ->orderByDesc('papers.id');
 
         if ($years = Arr::get($filters, 'years', [])) $q->whereIn('papers.year', $years);
@@ -264,12 +256,13 @@ class ReportController extends Controller
             }
         }
 
-        // chapters in requested order
+        // chapters selection (owner-scoped)
         $chapterIds = array_values(array_filter((array) Arr::get($selections, 'chapters', [])));
         $chapters = [];
         if (!empty($chapterIds)) {
             $rows = DB::table('chapters')
                 ->select(['id','title','body_html'])
+                ->where('user_id', $uid)
                 ->whereIn('id', $chapterIds)
                 ->orderByRaw("FIELD(id," . implode(',', array_map('intval',$chapterIds)) . ")")
                 ->get();
@@ -288,32 +281,14 @@ class ReportController extends Controller
 
     /* --------------------------- Selection-driven PREVIEW --------------------------- */
 
-    /**
-     * PREVIEW — selection-driven response.
-     *
-     * Request:
-     *  - name? string
-     *  - template? string  (ignored for dataset composition)
-     *  - format? string    (ignored for dataset composition; client renders)
-     *  - filters: array
-     *  - selections: { include, includeOrder, chapters? }
-     *  - options.keepHtml? boolean (only affects ROL sections)
-     *
-     * Response always includes:
-     *  {
-     *    name, template,
-     *    meta: { totalPapers, selectedSections, chapterCount },
-     *    // present only if requested:
-     *    columns, rows,            // ROL dataset
-     *    literature, chapters      // Synopsis-like dataset
-     *  }
-     */
     public function preview(Request $request)
     {
+        $uid = $request->user()->id ?? abort(401, 'Unauthenticated');
+
         $payload = $request->validate([
             'name'       => 'nullable|string|max:255',
-            'template'   => 'nullable|string',   // no longer decisive
-            'format'     => 'nullable|string',   // no longer decisive
+            'template'   => 'nullable|string',
+            'format'     => 'nullable|string',
             'filters'    => 'required|array',
             'selections' => 'required|array',
             'options'    => 'sometimes|array',
@@ -326,7 +301,6 @@ class ReportController extends Controller
         $selections = $payload['selections'];
         $options    = Arr::get($payload, 'options', []);
 
-        // Determine requested blocks
         $include      = Arr::get($selections, 'include', []);
         $includeOrder = Arr::get($selections, 'includeOrder', []);
         $chaptersSel  = (array) Arr::get($selections, 'chapters', []);
@@ -338,17 +312,15 @@ class ReportController extends Controller
             'name'     => $name,
             'template' => $template,
             'meta'     => [
-                'totalPapers'  => (int) Paper::count(),
-                'selectedSections' => [], // filled below if ROL requested
-                'chapterCount' => (int) count($chaptersSel),
+                'totalPapers'      => (int) Paper::where('created_by', $uid)->count(),
+                'selectedSections' => [],
+                'chapterCount'     => (int) count($chaptersSel),
             ],
         ];
 
-        // ROL block (if any section checked)
         if ($hasROL) {
-            [$columns, $rows] = $this->buildRolDataset($filters, $selections, $options);
+            [$columns, $rows] = $this->buildRolDataset($uid, $filters, $selections, $options);
 
-            // derive human labels for selected sections (after base columns)
             $baseCount = 5 + (Schema::hasColumn('papers', 'category') ? 1 : 0);
             $selectedSectionLabels = array_map(
                 fn($c) => $c['label'],
@@ -360,14 +332,12 @@ class ReportController extends Controller
             $resp['rows']    = $rows;
         }
 
-        // Synopsis-like block (if chapters requested)
         if ($hasChapters) {
-            $syn = $this->buildSynopsisDataset($filters, $selections);
-            $resp['literature'] = $syn['literature']; // [{paper_id,title,authors,year,text}]
-            $resp['chapters']   = $syn['chapters'];   // [{id,title,body_html}]
+            $syn = $this->buildSynopsisDataset($uid, $filters, $selections);
+            $resp['literature'] = $syn['literature'];
+            $resp['chapters']   = $syn['chapters'];
         }
 
-        // If neither selected, still send outline/kpis for UI (optional)
         if (!$hasROL && !$hasChapters) {
             $resp['outline'] = array_values($includeOrder);
             $resp['kpis'] = [
@@ -379,10 +349,12 @@ class ReportController extends Controller
         return response()->json($resp);
     }
 
-    /* --------------------------- Generate (stub) --------------------------- */
+    /* --------------------------- Generate (owner-scoped stub) --------------------------- */
 
     public function generate(Request $request)
     {
+        $uid = $request->user()->id ?? abort(401, 'Unauthenticated');
+
         $payload = $request->validate([
             'template'   => 'nullable|string',
             'format'     => 'required|string|in:pdf,docx,xlsx,pptx',
@@ -400,11 +372,12 @@ class ReportController extends Controller
         Storage::disk($disk)->makeDirectory($dir);
         $path = "{$dir}/{$filename}";
 
-        // For now just store a small summary. Client still renders.
+        // Store a small summary (still owner-scoped content on client side)
         $summary = [
-            'format'     => $format,
-            'selections' => $payload['selections'],
-            'generatedAt'=> now()->toDateTimeString(),
+            'format'      => $format,
+            'selections'  => $payload['selections'],
+            'generatedAt' => now()->toDateTimeString(),
+            'userId'      => $uid,
         ];
         Storage::disk($disk)->put($path, json_encode($summary, JSON_PRETTY_PRINT));
 
@@ -415,21 +388,29 @@ class ReportController extends Controller
         ]);
     }
 
-    /* --------------------------- Bulk export (unchanged stub) --------------------------- */
+    /* --------------------------- Bulk export (owner-scoped stub) --------------------------- */
 
     public function bulkExport(Request $request)
     {
+        $uid = $request->user()->id ?? abort(401, 'Unauthenticated');
+
         $payload = $request->validate([
             'type'    => 'required|string|in:all-users,all-papers,by-collection',
             'format'  => 'required|string|in:xlsx,csv,pdf',
             'filters' => 'array',
         ]);
 
+        // Even if client says "all-users", we only export THIS user's scope here.
         $disk = 'public';
         $dir  = 'reports/' . now()->format('Y/m');
         Storage::disk($disk)->makeDirectory($dir);
         $path = "{$dir}/bulk_export_" . now()->timestamp . ".txt";
-        Storage::disk($disk)->put($path, json_encode($payload, JSON_PRETTY_PRINT));
+
+        $payloadToSave = $payload;
+        $payloadToSave['effective_scope'] = 'current-user';
+        $payloadToSave['user_id'] = $uid;
+
+        Storage::disk($disk)->put($path, json_encode($payloadToSave, JSON_PRETTY_PRINT));
 
         return response()->json([
             'disk'        => $disk,

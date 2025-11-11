@@ -10,12 +10,19 @@ use Illuminate\Http\Request;
 use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Storage;
+use Illuminate\Database\QueryException;
+use App\Http\Controllers\Concerns\OwnerAuthorizes;
 
 class PaperController extends Controller
 {
+    use OwnerAuthorizes;
+    
     public function index(Request $req)
     {
-        $q = Paper::query()->withCount('files');
+        // Scope to current user's papers
+        $q = Paper::query()
+            ->where('created_by', $req->user()->id)
+            ->withCount('files');
 
         if ($s = $req->get('search')) {
             $q->where(function ($w) use ($s) {
@@ -37,6 +44,7 @@ class PaperController extends Controller
 
     public function show(Paper $paper)
     {
+        $this->authorizeOwner($paper, 'created_by');
         $paper->load('files');
         return new PaperResource($paper);
     }
@@ -66,6 +74,8 @@ class PaperController extends Controller
 
     public function update(PaperRequest $req, Paper $paper)
     {
+        $this->authorizeOwner($paper, 'created_by');
+
         $userId = $req->user()->id ?? null;
 
         $paper = DB::transaction(function () use ($req, $paper, $userId) {
@@ -84,6 +94,8 @@ class PaperController extends Controller
 
     public function destroy(Paper $paper)
     {
+        $this->authorizeOwner($paper, 'created_by');
+
         $attempts = 0;
         $max = 3;
 
@@ -123,15 +135,22 @@ class PaperController extends Controller
 
     public function bulkDestroy(BulkDeletePapersRequest $req)
     {
+        $userId = auth()->id();
         $ids = $req->validated()['ids'];
+
+        // Restrict to user-owned IDs only (silently ignore others)
+        $ownedIds = Paper::whereIn('id', $ids)
+            ->where('created_by', $userId)
+            ->pluck('id')
+            ->all();
 
         $attempts = 0;
         $max = 3;
 
         while (true) {
             try {
-                DB::transaction(function () use ($ids) {
-                    $papers = Paper::with('files')->whereIn('id', $ids)->get();
+                DB::transaction(function () use ($ownedIds) {
+                    $papers = Paper::with('files')->whereIn('id', $ownedIds)->get();
 
                     foreach ($papers as $paper) {
                         foreach ($paper->files as $file) {
@@ -147,10 +166,10 @@ class PaperController extends Controller
                     }
 
                     // Delete papers at the end (FKs may cascade other relations)
-                    Paper::whereIn('id', $ids)->delete();
+                    Paper::whereIn('id', $ownedIds)->delete();
                 });
 
-                return response()->json(['ok' => true, 'deleted' => $ids]);
+                return response()->json(['ok' => true, 'deleted' => $ownedIds]);
             } catch (QueryException $e) {
                 $attempts++;
                 if ($attempts < $max && str_contains($e->getMessage(), '1615')) {
@@ -162,13 +181,12 @@ class PaperController extends Controller
         }
     }
 
-
     /**
      * Save an uploaded file to storage and create the paper_files row.
      */
     private function attachFileToPaper(Paper $paper, UploadedFile $file, ?int $userId = null): void
     {
-        $disk   = 'public';                   // matches config/filesystems.php 'public' disk
+        $disk   = 'uploads';                   // matches config/filesystems.php 'public' disk
         $subdir = now()->format('Y/m');       // e.g. 2025/11
         $dir    = "library/{$subdir}";
 
@@ -188,4 +206,5 @@ class PaperController extends Controller
             'uploaded_by'   => $userId,
         ]);
     }
+
 }

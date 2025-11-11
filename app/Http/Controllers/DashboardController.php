@@ -7,22 +7,22 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Carbon\Carbon;
 use Carbon\CarbonPeriod;
+use App\Http\Controllers\Concerns\OwnerAuthorizes;
 
 class DashboardController extends Controller
 {
+    use OwnerAuthorizes;
+
     /**
      * KPIs + weekly series (last 8 ISO weeks).
      * Output matches the Redux slice you already wired.
      */
     public function summary(Request $req)
     {
-        $uid = $req->user()->id;
+        $uid = $req->user()->id ?? abort(401, 'Unauthenticated');
 
         // ----- Totals -----
         $totalPapers  = DB::table('papers')->where('created_by', $uid)->count();
-
-        // If your papers table uses a different user field, change 'created_by' -> 'user_id'
-        // $totalPapers = DB::table('papers')->where('user_id', $uid)->count();
 
         // Reviews table should have: user_id, status ('done'|'pending'|...)
         $reviewed     = DB::table('reviews')->where('user_id', $uid)->where('status', 'done')->count();
@@ -63,7 +63,7 @@ class DashboardController extends Controller
      */
     public function dailySeries(Request $req)
     {
-        $uid  = $req->user()->id;
+        $uid  = $req->user()->id ?? abort(401, 'Unauthenticated');
         $days = max(1, min((int) $req->integer('days', 30), 180));
 
         $to   = Carbon::today();
@@ -84,8 +84,9 @@ class DashboardController extends Controller
      */
     public function weeklySeries(Request $req)
     {
-        $uid   = $req->user()->id;
+        $uid   = $req->user()->id ?? abort(401, 'Unauthenticated');
         $weeks = max(1, min((int) $req->integer('weeks', 12), 52));
+
         return response()->json([
             'data' => $this->weeklyAddedVsReviewed($uid, $weeks, true) // same aggregator, explicit return format
         ]);

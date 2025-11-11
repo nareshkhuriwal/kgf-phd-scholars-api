@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Reviews;
 
 use App\Http\Controllers\Controller;
+use App\Http\Controllers\Concerns\OwnerAuthorizes;
 use App\Http\Requests\Reviews\SaveReviewRequest;
 use App\Http\Requests\Reviews\SaveReviewSectionRequest;
 use App\Http\Requests\Reviews\SaveReviewStatusRequest;
@@ -13,8 +14,13 @@ use Illuminate\Http\Request;
 
 class ReviewController extends Controller
 {
+    use OwnerAuthorizes;
+
     public function show(Request $request, Paper $paper)
     {
+        $request->user() ?? abort(401, 'Unauthenticated');
+        $this->authorizeOwner($paper, 'created_by');
+
         $review = Review::firstOrCreate(
             ['paper_id' => $paper->id, 'user_id' => $request->user()->id],
             ['status' => 'pending', 'review_sections' => []]
@@ -23,9 +29,9 @@ class ReviewController extends Controller
         // Backward-compat: hydrate empty review_sections from legacy fields
         if (empty($review->review_sections)) {
             $map = [
-                'Litracture Review'                      => $review->html,
-                'Key Issue'                              => $review->key_issue,
-                'Remarks'                                => $review->remarks,
+                'Litracture Review' => $review->html,
+                'Key Issue'         => $review->key_issue,
+                'Remarks'           => $review->remarks,
             ];
             $review->review_sections = array_filter($map, fn($v) => filled($v));
             $review->save();
@@ -43,6 +49,9 @@ class ReviewController extends Controller
      */
     public function update(SaveReviewRequest $request, Paper $paper)
     {
+        $request->user() ?? abort(401, 'Unauthenticated');
+        $this->authorizeOwner($paper, 'created_by');
+
         $review = Review::firstOrCreate(
             ['paper_id' => $paper->id, 'user_id' => $request->user()->id],
             ['status' => 'pending', 'review_sections' => []]
@@ -77,6 +86,9 @@ class ReviewController extends Controller
      */
     public function updateSection(SaveReviewSectionRequest $request, Paper $paper)
     {
+        $request->user() ?? abort(401, 'Unauthenticated');
+        $this->authorizeOwner($paper, 'created_by');
+
         $review = Review::firstOrCreate(
             ['paper_id' => $paper->id, 'user_id' => $request->user()->id],
             ['status' => 'pending', 'review_sections' => []]
@@ -99,6 +111,9 @@ class ReviewController extends Controller
      */
     public function updateStatus(SaveReviewStatusRequest $request, Paper $paper)
     {
+        $request->user() ?? abort(401, 'Unauthenticated');
+        $this->authorizeOwner($paper, 'created_by');
+
         $review = Review::firstOrCreate(
             ['paper_id' => $paper->id, 'user_id' => $request->user()->id],
             ['status' => 'pending', 'review_sections' => []]

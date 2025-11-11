@@ -151,8 +151,8 @@ class LibraryImportController extends Controller
             'source'     => 'upload',
         ]);
 
-        // Store the file on public disk
-        $disk   = 'public';
+        // Store the file on uploads disk
+        $disk   = 'uploads';
         $subdir = now()->format('Y/m');
         $path   = $file->store("library/{$subdir}", $disk);
 
@@ -193,7 +193,7 @@ class LibraryImportController extends Controller
         if (!strlen($bytes)) return null;
 
         $mime   = $resp->header('Content-Type', 'application/octet-stream');
-        $disk   = 'public';
+        $disk   = 'uploads';
         $subdir = now()->format('Y/m');
         $ext    = $this->extensionFromMime($mime) ?? 'bin';
         $name   = basename(parse_url($url, PHP_URL_PATH) ?: 'download');

@@ -13,23 +13,32 @@ class ProfileController extends Controller
     /** GET /me (optional, handy for bootstrapping) */
     public function me(Request $request): UserResource
     {
-        return new UserResource($request->user());
+        $user = $request->user() ?? abort(401, 'Unauthenticated');
+        return new UserResource($user);
     }
 
     /** PUT/PATCH /me */
     public function update(ProfileUpdateRequest $request): JsonResponse
     {
-        $user = $request->user();
+        $user = $request->user() ?? abort(401, 'Unauthenticated');
         $data = $request->validated();
 
-        // remove fields we handle specially
-        $password = $data['password'] ?? null;
+        // Pull password fields (handle specially)
+        $password         = $data['password'] ?? null;
+        $currentPassword  = $data['current_password'] ?? null;
+
         unset($data['password'], $data['password_confirmation'], $data['current_password']);
 
-        // simple mass-assign permitted fields
+        // Mass-assign permitted fields from the request DTO
         $user->fill($data);
 
+        // If password change requested, require current password to match
         if ($password) {
+            if (!$currentPassword || !Hash::check($currentPassword, $user->password)) {
+                return response()->json([
+                    'message' => 'Current password is incorrect.'
+                ], 422);
+            }
             $user->password = Hash::make($password);
         }
 

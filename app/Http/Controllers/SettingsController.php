@@ -17,8 +17,10 @@ class SettingsController extends Controller
     /** GET /settings */
     public function show(Request $req)
     {
+        $user = $req->user() ?? abort(401, 'Unauthenticated');
+
         $settings = UserSetting::firstOrCreate(
-            ['user_id' => $req->user()->id],
+            ['user_id' => $user->id],
             [
                 'citation_style'     => 'chicago-note-bibliography-short',
                 'note_format'        => 'markdown+richtext',
@@ -40,6 +42,8 @@ class SettingsController extends Controller
     /** PUT /settings */
     public function update(Request $req)
     {
+        $user = $req->user() ?? abort(401, 'Unauthenticated');
+
         $data = $req->validate([
             'citationStyle'   => 'nullable|string|in:'.implode(',', $this->styles),
             'noteFormat'      => 'nullable|string|in:'.implode(',', $this->noteFormats),
@@ -48,7 +52,7 @@ class SettingsController extends Controller
             'includeUrls'     => 'nullable|boolean',
         ]);
 
-        $settings = UserSetting::firstOrCreate(['user_id' => $req->user()->id]);
+        $settings = UserSetting::firstOrCreate(['user_id' => $user->id]);
 
         // Map camelCase → snake_case columns; only update provided keys
         $map = [
