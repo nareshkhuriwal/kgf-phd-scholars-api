@@ -50,7 +50,7 @@ class PaperFileController extends Controller
         if ($file->paper_id !== $paper->id) abort(404);
         $this->authorizeOwner($paper, 'created_by');
 
-        Storage::disk($file->disk ?: 'public')->delete($file->path);
+        Storage::disk($file->disk ?: 'uploads')->delete($file->path);
         $file->delete();
 
         return response()->json(['ok' => true]);

@@ -17,6 +17,7 @@ use App\Http\Controllers\SettingsController;
 use App\Http\Controllers\ReportController;
 use App\Http\Controllers\SavedReportController;
 use App\Http\Controllers\ProfileController;
+use App\Http\Controllers\PdfHighlightController;
 
 
 // Public or rate-limited auth endpoints
@@ -45,6 +46,11 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('/dashboard/series/weekly', [DashboardController::class, 'weeklySeries']); // last N ISO weeks
 
     // Papers
+    Route::post('/papers/{paper}/highlights/apply', [PdfHighlightController::class, 'apply']);
+    Route::post('/pdfs/upload', [PdfHighlightController::class, 'store']); // generic
+    // attach to a paper (saves file and optional PaperFile row)
+    // Route::post('/papers/{paper}/highlights/upload', [PdfUploadController::class, 'storeForPaper']);
+
     Route::get('/papers', [PaperController::class, 'index']);
     Route::post('/papers', [PaperController::class, 'store']);
     Route::get('/papers/{paper}', [PaperController::class, 'show']);

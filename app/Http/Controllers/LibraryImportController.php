@@ -328,7 +328,7 @@ class LibraryImportController extends Controller
                 if ($resp->ok() && strlen($resp->body())) {
                     $bytes  = $resp->body();
                     $mime   = $resp->header('Content-Type', 'application/pdf');
-                    $disk   = 'public';
+                    $disk   = 'uploads';
                     $subdir = now()->format('Y/m');
                     $orig   = basename(parse_url($e['pdf_url'], PHP_URL_PATH) ?: 'paper.pdf');
                     $path   = "library/{$subdir}/".Str::random(10)."_".$orig;
@@ -384,10 +384,10 @@ class LibraryImportController extends Controller
                         if ($resp->ok() && strlen($resp->body())) {
                             $bytes  = $resp->body();
                             $mime   = $resp->header('Content-Type', 'application/pdf');
-                            $disk   = 'public';
+                            $disk   = 'uploads';
                             $subdir = now()->format('Y/m');
                             $orig   = basename(parse_url($row['pdf_url'], PHP_URL_PATH) ?: 'paper.pdf');
-                            $path   = "library/{$subdir}/".Str::random(10)."_".$orig;
+                            $path   = "library/{$subdir}/".Str::random(10)."_".$orig; // (no uploads/ prefix)
 
                             Storage::disk($disk)->put($path, $bytes);
 
