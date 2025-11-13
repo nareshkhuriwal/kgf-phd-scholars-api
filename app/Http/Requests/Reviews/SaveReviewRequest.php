@@ -10,7 +10,7 @@ class SaveReviewRequest extends FormRequest
     public function rules(): array {
         return [
             'html'             => ['nullable','string'],
-            'status'           => ['nullable','in:pending,done'],
+            'status'          => ['nullable', 'in:draft,in_progress,done,archived'],
             'key_issue'        => ['nullable','string'],
             'remarks'          => ['nullable','string'],
             'review_sections'  => ['nullable','array'],      // NEW

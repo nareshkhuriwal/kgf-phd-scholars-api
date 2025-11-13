@@ -8,6 +8,6 @@ class SaveReviewStatusRequest extends FormRequest
 {
     public function authorize(): bool { return true; }
     public function rules(): array {
-        return ['status' => ['required','in:pending,done']]; // use 'done' for complete
+        return ['status' => ['required', 'in:draft,in_progress,done,archived']]; // use 'done' for complete
     }
 }

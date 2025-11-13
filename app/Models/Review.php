@@ -7,6 +7,11 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
 
 class Review extends Model
 {
+    public const STATUS_DRAFT       = 'draft';
+    public const STATUS_IN_PROGRESS = 'in_progress';
+    public const STATUS_DONE        = 'done';
+    public const STATUS_ARCHIVED    = 'archived';
+    
     protected $fillable = [
         'paper_id','user_id',
         'html','status','key_issue','remarks',

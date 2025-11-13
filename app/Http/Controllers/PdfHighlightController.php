@@ -271,7 +271,7 @@ public function store(Request $request)
         
         return response()->json([
             'message'   => 'Highlights applied',
-            'file_url'  => $rawUrl . '?v=' . $ver, // versioned URL for immediate refresh
+            'file_url'  => $rawUrl , // . '?v=' . $ver versioned URL for immediate refresh
             'raw_url'   => $rawUrl,                // keep original in case you need it
             'replaced'  => $replace,
         ]);

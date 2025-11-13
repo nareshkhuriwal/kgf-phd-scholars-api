@@ -23,7 +23,10 @@ class ReviewController extends Controller
 
         $review = Review::firstOrCreate(
             ['paper_id' => $paper->id, 'user_id' => $request->user()->id],
-            ['status' => 'pending', 'review_sections' => []]
+            [
+                'status'          => Review::STATUS_DRAFT,
+                'review_sections' => [],
+            ]
         );
 
         // Backward-compat: hydrate empty review_sections from legacy fields
@@ -33,7 +36,7 @@ class ReviewController extends Controller
                 'Key Issue'         => $review->key_issue,
                 'Remarks'           => $review->remarks,
             ];
-            $review->review_sections = array_filter($map, fn($v) => filled($v));
+            $review->review_sections = array_filter($map, fn ($v) => filled($v));
             $review->save();
         }
 
@@ -45,7 +48,8 @@ class ReviewController extends Controller
 
     /**
      * FULL update — accepts all sections at once
-     * Body may include: html, status, key_issue, remarks, review_sections (object)
+     * Body may include: html, key_issue, remarks, review_sections (object)
+     * Any save => status becomes in_progress (unless archived)
      */
     public function update(SaveReviewRequest $request, Paper $paper)
     {
@@ -54,24 +58,34 @@ class ReviewController extends Controller
 
         $review = Review::firstOrCreate(
             ['paper_id' => $paper->id, 'user_id' => $request->user()->id],
-            ['status' => 'pending', 'review_sections' => []]
+            [
+                'status'          => Review::STATUS_DRAFT,
+                'review_sections' => [],
+            ]
         );
 
-        $data = $request->only(['html','status','key_issue','remarks','review_sections']);
+        // We deliberately ignore any incoming 'status' here; status is driven by workflow.
+        $data = $request->only(['html', 'key_issue', 'remarks', 'review_sections']);
 
         // Update structured sections (JSON)
         if ($request->has('review_sections')) {
             $incoming = $data['review_sections'];
             if (is_array($incoming)) {
-                $review->review_sections = $incoming; // replace by design
+                // Replace complete sections by design
+                $review->review_sections = $incoming;
             }
         }
 
         // Keep legacy fields for exports/back-compat
-        foreach (['html','status','key_issue','remarks'] as $k) {
+        foreach (['html', 'key_issue', 'remarks'] as $k) {
             if ($request->filled($k)) {
                 $review->{$k} = $data[$k];
             }
+        }
+
+        // Any full save moves to in_progress (unless archived)
+        if ($review->status !== Review::STATUS_ARCHIVED) {
+            $review->status = Review::STATUS_IN_PROGRESS;
         }
 
         $review->save();
@@ -83,6 +97,7 @@ class ReviewController extends Controller
     /**
      * PARTIAL update — update just one tab/section
      * Body: { section_key: string, html: string }
+     * Any save => status becomes in_progress (unless archived)
      */
     public function updateSection(SaveReviewSectionRequest $request, Paper $paper)
     {
@@ -91,12 +106,20 @@ class ReviewController extends Controller
 
         $review = Review::firstOrCreate(
             ['paper_id' => $paper->id, 'user_id' => $request->user()->id],
-            ['status' => 'pending', 'review_sections' => []]
+            [
+                'status'          => Review::STATUS_DRAFT,
+                'review_sections' => [],
+            ]
         );
 
         $sections = $review->review_sections ?? [];
         $sections[$request->input('section_key')] = $request->input('html') ?? '';
         $review->review_sections = $sections;
+
+        // Any section save moves to in_progress (unless archived)
+        if ($review->status !== Review::STATUS_ARCHIVED) {
+            $review->status = Review::STATUS_IN_PROGRESS;
+        }
 
         // Do not touch $review->html here (full concat stays in full update)
         $review->save();
@@ -106,8 +129,8 @@ class ReviewController extends Controller
     }
 
     /**
-     * Status toggle — mark as done/pending
-     * Body: { status: 'done' | 'pending' }
+     * Status toggle — explicit change (MARK COMPLETE, Archive, etc.)
+     * Body: { status: 'draft' | 'in_progress' | 'done' | 'archived' }
      */
     public function updateStatus(SaveReviewStatusRequest $request, Paper $paper)
     {
@@ -116,10 +139,13 @@ class ReviewController extends Controller
 
         $review = Review::firstOrCreate(
             ['paper_id' => $paper->id, 'user_id' => $request->user()->id],
-            ['status' => 'pending', 'review_sections' => []]
+            [
+                'status'          => Review::STATUS_DRAFT,
+                'review_sections' => [],
+            ]
         );
 
-        $review->status = $request->input('status'); // 'done' or 'pending'
+        $review->status = $request->input('status'); // draft | in_progress | done | archived
         $review->save();
         $review->load(['paper.files']);
 
