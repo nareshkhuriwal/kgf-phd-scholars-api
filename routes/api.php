@@ -18,7 +18,7 @@ use App\Http\Controllers\ReportController;
 use App\Http\Controllers\SavedReportController;
 use App\Http\Controllers\ProfileController;
 use App\Http\Controllers\PdfHighlightController;
-
+use App\Http\Controllers\ResearcherInviteController;
 
 // Public or rate-limited auth endpoints
 Route::post('/auth/login', [AuthController::class, 'login']);
@@ -39,6 +39,14 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('/settings',  [SettingsController::class, 'show']);
     Route::put('/settings',  [SettingsController::class, 'update']);
 
+    Route::get('/researchers/invites', [ResearcherInviteController::class, 'index']);
+    Route::post('/researchers/invites', [ResearcherInviteController::class, 'store']);
+    Route::delete('/researchers/invites/{invite}', [ResearcherInviteController::class, 'destroy']);
+    Route::post('/researchers/invites/{invite}/resend', [ResearcherInviteController::class, 'resend']);
+    // Researcher-side (invited user) endpoints
+    Route::get('/researchers/my-invites', [ResearcherInviteController::class, 'myInvites']);
+    Route::post('/researchers/invites/{invite}/accept', [ResearcherInviteController::class, 'accept']);
+    Route::post('/researchers/invites/{invite}/reject', [ResearcherInviteController::class, 'reject']);
 
 
     Route::get('/dashboard/summary', [DashboardController::class, 'summary']);
@@ -69,8 +77,6 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('/papers/{paper}/comments', [PaperCommentController::class, 'store']);
     Route::put('/papers/{paper}/comments/{comment}', [PaperCommentController::class, 'update']);
     Route::delete('/papers/{paper}/comments/{comment}', [PaperCommentController::class, 'destroy']);
-
-
 
     // Collections
     Route::get   ('/collections', [CollectionController::class, 'index']);
