@@ -12,17 +12,25 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Database\QueryException;
 use App\Http\Controllers\Concerns\OwnerAuthorizes;
+use App\Http\Controllers\Concerns\SupervisesResearchers;
 
 class PaperController extends Controller
 {
-    use OwnerAuthorizes;
+    use OwnerAuthorizes, SupervisesResearchers;
     
     public function index(Request $req)
     {
         // Scope to current user's papers
+        // $q = Paper::query()
+        //     ->where('created_by', $req->user()->id)
+        //     ->withCount('files');
+            
+        $visibleUserIds = $this->visibleUserIdsForCurrent($req);
+
         $q = Paper::query()
-            ->where('created_by', $req->user()->id)
+            ->whereIn('created_by', $visibleUserIds)
             ->withCount('files');
+            
 
         if ($s = $req->get('search')) {
             $q->where(function ($w) use ($s) {

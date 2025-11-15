@@ -8,17 +8,24 @@ use App\Http\Requests\BulkDeleteSavedReportsRequest;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Log;
 use App\Http\Controllers\Concerns\OwnerAuthorizes;
+use App\Http\Controllers\Concerns\SupervisesResearchers;
+
 
 class SavedReportController extends Controller
 {
-    use OwnerAuthorizes;
+    use OwnerAuthorizes, SupervisesResearchers;
 
     // LIST with search + pagination (scoped to owner)
     public function index(Request $req)
     {
-        $q = SavedReport::query()
-            ->where('created_by', $req->user()->id);
+        // $q = SavedReport::query()
+        //     ->where('created_by', $req->user()->id);
 
+        $visibleUserIds = $this->visibleUserIdsForCurrent($req);
+
+        $q = SavedReport::query()
+            ->whereIn('created_by', $visibleUserIds);
+            
         if ($s = $req->get('search')) {
             $q->where(function ($w) use ($s) {
                 $w->where('name','like',"%{$s}%")

@@ -8,6 +8,8 @@ use App\Http\Resources\ResearcherInviteResource;
 use App\Models\ResearcherInvite;
 use Illuminate\Http\Request;
 use Illuminate\Support\Str;
+use App\Models\User;
+
 
 class ResearcherInviteController extends Controller
 {
@@ -37,7 +39,7 @@ class ResearcherInviteController extends Controller
 
         // Supervisor details & ownership come from auth user
         $supervisorName = $user->name
-            ?? ($user->full_name ?? null); // adjust to your User model
+            ?? ($user->name ?? null); // adjust to your User model
 
         // Expiry logic (optional)
         $expiresInDays = method_exists($request, 'integer')
@@ -57,9 +59,13 @@ class ResearcherInviteController extends Controller
             }
         }
 
+        // Try to find existing user with that email
+        $existingUser = User::where('email', $researcherEmail)->first();
+        $researcherName = $existingUser?->name;
+
         $invite = ResearcherInvite::create([
             'researcher_email' => $researcherEmail,
-            'researcher_name'  => null, // will be filled after signup
+            'researcher_name'  => $researcherName, // will be filled after signup
             'supervisor_name'  => $supervisorName,
             'message'          => $request->input('message'),
             'role'             => 'researcher',
@@ -73,8 +79,6 @@ class ResearcherInviteController extends Controller
             'created_by'       => $user->id,
         ]);
 
-        // TODO: send mail notification
-        // dispatch(new SendResearcherInviteMail($invite));
 
         return new ResearcherInviteResource($invite);
     }
@@ -169,6 +173,12 @@ class ResearcherInviteController extends Controller
         if ($invite->isAccepted()) {
             // Already accepted – you can treat as success
             return new ResearcherInviteResource($invite);
+        }
+        
+        // pick researcher name from users table (or from current user)
+        if (empty($invite->researcher_name)) {
+            // You can use the current auth user directly:
+            $invite->researcher_name = $user->name;
         }
 
         $invite->accepted_at = now();

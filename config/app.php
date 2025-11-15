@@ -13,7 +13,7 @@ return [
     |
     */
 
-    'name' => env('APP_NAME', 'Laravel'),
+    'name' => env('APP_NAME', 'KGF Scholars'),
 
     /*
     |--------------------------------------------------------------------------
@@ -53,6 +53,7 @@ return [
     */
 
     'url' => env('APP_URL', 'http://localhost:8000/api'),
+    'frontend_url' => env('FRONTEND_URL', 'https://scholars.khuriwalgroup.com'),
 
     /*
     |--------------------------------------------------------------------------

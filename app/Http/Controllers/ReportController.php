@@ -8,9 +8,13 @@ use Illuminate\Support\Arr;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Facades\Storage;
+use App\Http\Controllers\Concerns\SupervisesResearchers;
+
 
 class ReportController extends Controller
 {
+    use SupervisesResearchers;
+
     /**
      * Quick JSON for ROL page (owner-scoped)
      */
@@ -18,9 +22,11 @@ class ReportController extends Controller
     {
         $uid = $request->user()->id ?? abort(401, 'Unauthenticated');
 
+        $visibleUserIds = $this->visibleUserIdsForCurrent($request);
+
         $rows = Paper::query()
             ->select(['id','doi','authors','title','year', ...(Schema::hasColumn('papers','category') ? ['category'] : [])])
-            ->where('created_by', $uid)
+            ->whereIn('created_by', $visibleUserIds)
             ->orderByDesc('created_at')
             ->get()
             ->map(function ($p) {

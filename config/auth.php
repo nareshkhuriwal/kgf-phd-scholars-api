@@ -111,5 +111,8 @@ return [
     */
 
     'password_timeout' => env('AUTH_PASSWORD_TIMEOUT', 10800),
+    
+    'admin_registration_code' => env('ADMIN_REGISTRATION_CODE', null),
+
 
 ];

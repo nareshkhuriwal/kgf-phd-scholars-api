@@ -19,14 +19,22 @@ use App\Http\Controllers\SavedReportController;
 use App\Http\Controllers\ProfileController;
 use App\Http\Controllers\PdfHighlightController;
 use App\Http\Controllers\ResearcherInviteController;
+use App\Http\Controllers\SupervisorController;
+
 
 // Public or rate-limited auth endpoints
 Route::post('/auth/login', [AuthController::class, 'login']);
 Route::post('/auth/register', [AuthController::class, 'register']);   // public
 
+// Forgot password via OTP
+Route::post('forgot-password/otp', [AuthController::class, 'sendPasswordOtp']);
+Route::post('reset-password/otp', [AuthController::class, 'resetPasswordWithOtp']);
+
+
 Route::middleware('auth:sanctum')->group(function () {
     Route::get('/auth/me', [AuthController::class, 'me']);
     Route::post('/auth/logout', [AuthController::class, 'logout']);
+    Route::post('auth/change-password', [AuthController::class, 'changePassword']);
 
     Route::put('/profile/me', [ProfileController::class, 'update']);          // update profile
     Route::patch('/profile/me', [ProfileController::class, 'update']);        // partial update
@@ -39,14 +47,8 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('/settings',  [SettingsController::class, 'show']);
     Route::put('/settings',  [SettingsController::class, 'update']);
 
-    Route::get('/researchers/invites', [ResearcherInviteController::class, 'index']);
-    Route::post('/researchers/invites', [ResearcherInviteController::class, 'store']);
-    Route::delete('/researchers/invites/{invite}', [ResearcherInviteController::class, 'destroy']);
-    Route::post('/researchers/invites/{invite}/resend', [ResearcherInviteController::class, 'resend']);
-    // Researcher-side (invited user) endpoints
-    Route::get('/researchers/my-invites', [ResearcherInviteController::class, 'myInvites']);
-    Route::post('/researchers/invites/{invite}/accept', [ResearcherInviteController::class, 'accept']);
-    Route::post('/researchers/invites/{invite}/reject', [ResearcherInviteController::class, 'reject']);
+    Route::post('/papers/{paper}/highlights/apply', [PdfHighlightController::class, 'apply']);
+    Route::post('/pdfs/upload', [PdfHighlightController::class, 'store']); // generic
 
 
     Route::get('/dashboard/summary', [DashboardController::class, 'summary']);
@@ -54,11 +56,6 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('/dashboard/series/weekly', [DashboardController::class, 'weeklySeries']); // last N ISO weeks
 
     // Papers
-    Route::post('/papers/{paper}/highlights/apply', [PdfHighlightController::class, 'apply']);
-    Route::post('/pdfs/upload', [PdfHighlightController::class, 'store']); // generic
-    // attach to a paper (saves file and optional PaperFile row)
-    // Route::post('/papers/{paper}/highlights/upload', [PdfUploadController::class, 'storeForPaper']);
-
     Route::get('/papers', [PaperController::class, 'index']);
     Route::post('/papers', [PaperController::class, 'store']);
     Route::get('/papers/{paper}', [PaperController::class, 'show']);
@@ -77,6 +74,19 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('/papers/{paper}/comments', [PaperCommentController::class, 'store']);
     Route::put('/papers/{paper}/comments/{comment}', [PaperCommentController::class, 'update']);
     Route::delete('/papers/{paper}/comments/{comment}', [PaperCommentController::class, 'destroy']);
+
+
+    Route::get('/researchers/invites', [ResearcherInviteController::class, 'index']);
+    Route::post('/researchers/invites', [ResearcherInviteController::class, 'store']);
+    Route::delete('/researchers/invites/{invite}', [ResearcherInviteController::class, 'destroy']);
+    Route::post('/researchers/invites/{invite}/resend', [ResearcherInviteController::class, 'resend']);
+    // Researcher-side (invited user) endpoints
+    Route::get('/researchers/my-invites', [ResearcherInviteController::class, 'myInvites']);
+    Route::post('/researchers/invites/{invite}/accept', [ResearcherInviteController::class, 'accept']);
+    Route::post('/researchers/invites/{invite}/reject', [ResearcherInviteController::class, 'reject']);
+
+    Route::apiResource('supervisors', SupervisorController::class);
+
 
     // Collections
     Route::get   ('/collections', [CollectionController::class, 'index']);
