@@ -50,10 +50,13 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('/papers/{paper}/highlights/apply', [PdfHighlightController::class, 'apply']);
     Route::post('/pdfs/upload', [PdfHighlightController::class, 'store']); // generic
 
-
+    
     Route::get('/dashboard/summary', [DashboardController::class, 'summary']);
-    Route::get('/dashboard/series/daily', [DashboardController::class, 'dailySeries']); // last N days
-    Route::get('/dashboard/series/weekly', [DashboardController::class, 'weeklySeries']); // last N ISO weeks
+    Route::get('/dashboard/series/daily', [DashboardController::class, 'dailySeries']);
+    Route::get('/dashboard/series/weekly', [DashboardController::class, 'weeklySeries']);
+
+    Route::get('/dashboard/filters', [DashboardController::class, 'filters']);
+    Route::get('/dashboard/filters/researchers-by-supervisor', [DashboardController::class, 'researchersBySupervisor']);
 
     // Papers
     Route::get('/papers', [PaperController::class, 'index']);
