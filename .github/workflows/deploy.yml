@@ -1,0 +1,68 @@
+name: Deploy to cPanel (Shared Hosting)
+
+on:
+  push:
+    branches:
+      - main        # change if you use a different deploy branch
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      # 1) Checkout code
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # 2) Setup PHP for Laravel build
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.2'       # adjust to your PHP version on server
+          extensions: mbstring, intl, pdo_mysql, bcmath
+          coverage: none
+
+      # 3) Install composer dependencies (no dev)
+      - name: Install Composer dependencies
+        run: |
+          composer install --no-dev --no-interaction --prefer-dist --optimize-autoloader
+
+      # 4) (Optional) Build frontend assets (if you have them)
+      # Comment this block if you don't have npm / mix / vite
+      - name: Install Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Build frontend assets
+        run: |
+          if [ -f package.json ]; then
+            npm ci
+            # For Laravel Mix:
+            # npm run prod
+            # For Vite:
+            npm run build
+          fi
+
+      # 5) Prepare deployment package (exclude things we don't want on server)
+      - name: Prepare deployment files
+        run: |
+          mkdir deploy
+          rsync -av --exclude=".git" \
+                   --exclude=".github" \
+                   --exclude="node_modules" \
+                   --exclude="tests" \
+                   --exclude=".env" \
+                   ./ ./deploy
+
+      # 6) Upload via FTP to cPanel
+      - name: Deploy to cPanel via FTP
+        uses: SamKirkland/FTP-Deploy-Action@v4.3.5
+        with:
+          server: ${{ secrets.CPANEL_FTP_HOST }}
+          username: ${{ secrets.CPANEL_FTP_USERNAME }}
+          password: ${{ secrets.CPANEL_FTP_PASSWORD }}
+          local-dir: ./deploy
+          server-dir: ${{ secrets.CPANEL_FTP_PATH }}
+          # optional: keep files that are only on server (like .env, storage/logs etc.)
+          dangerous-clean-slate: false
