@@ -1,0 +1,14 @@
+RewriteEngine On
+
+# If request is exactly the root, send to public/
+RewriteRule ^$ public/ [L]
+
+# For everything else, prepend public/
+RewriteRule (.*) public/$1 [L]
+
+# php -- BEGIN cPanel-generated handler, do not edit
+# Set the “ea-php83” package as the default “PHP” programming language.
+<IfModule mime_module>
+  AddHandler application/x-httpd-ea-php83___lsphp .php .php8 .phtml
+</IfModule>
+# php -- END cPanel-generated handler, do not edit

@@ -11,8 +11,7 @@
         "laravel/framework": "^12.0",
         "laravel/sanctum": "^4.2",
         "laravel/tinker": "^2.10.1",
-        "phpoffice/phppresentation": "^1.2",
-        "phpoffice/phpspreadsheet": "^4.5",
+        "phpoffice/phpspreadsheet": "^5.0",
         "phpoffice/phpword": "^1.4",
         "razorpay/razorpay": "^2.9",
         "setasign/fpdi-tcpdf": "^2.3",
@@ -93,3 +92,5 @@
     "minimum-stability": "stable",
     "prefer-stable": true
 }
+ 
+ 
