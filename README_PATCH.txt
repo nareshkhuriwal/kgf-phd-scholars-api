@@ -12,6 +12,7 @@ Laravel API Patch for PhD Literature Review
 
 3) Update .env DB settings and (optional) APP_URL.
 
+
 4) Run migration & seed:
    php artisan migrate
    php artisan db:seed
