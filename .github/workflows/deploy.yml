@@ -56,13 +56,17 @@ jobs:
                    ./ ./deploy
 
       # 6) Upload via FTP to cPanel
+      - name: Show deployment package (debug)
+        run: |
+          echo "Listing deploy/ contents:"
+          ls -la deploy || echo "deploy/ not found"
+
       - name: Deploy to cPanel via FTP
         uses: SamKirkland/FTP-Deploy-Action@v4.3.5
         with:
           server: ${{ secrets.CPANEL_FTP_HOST }}
           username: ${{ secrets.CPANEL_FTP_USERNAME }}
           password: ${{ secrets.CPANEL_FTP_PASSWORD }}
-          local-dir: ./deploy
+          local-dir: ./deploy/          # <-- MUST end with a slash
           server-dir: ${{ secrets.CPANEL_FTP_PATH }}
-          # optional: keep files that are only on server (like .env, storage/logs etc.)
           dangerous-clean-slate: false
