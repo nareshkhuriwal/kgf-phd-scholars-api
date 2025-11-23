@@ -20,8 +20,9 @@ use App\Http\Controllers\ProfileController;
 use App\Http\Controllers\PdfHighlightController;
 use App\Http\Controllers\ResearcherInviteController;
 use App\Http\Controllers\SupervisorController;
-use App\Http\Controllers\PricingController;   // ✅ NEW
+use App\Http\Controllers\EditorUploadController;
 use App\Http\Controllers\PaymentController;
+
 
 // Public or rate-limited auth endpoints
 Route::post('/auth/login', [AuthController::class, 'login']);
@@ -31,9 +32,6 @@ Route::post('/auth/register', [AuthController::class, 'register']);   // public
 Route::post('forgot-password/otp', [AuthController::class, 'sendPasswordOtp']);
 Route::post('reset-password/otp', [AuthController::class, 'resetPasswordWithOtp']);
 
-// ✅ Public pricing endpoints
-Route::get('/pricing/all', [PricingController::class, 'all']);
-Route::get('/pricing/roles/{role}', [PricingController::class, 'showByRole']);
 
 Route::middleware('auth:sanctum')->group(function () {
     Route::get('/auth/me', [AuthController::class, 'me']);
@@ -42,6 +40,8 @@ Route::middleware('auth:sanctum')->group(function () {
 
     Route::put('/profile/me', [ProfileController::class, 'update']);          // update profile
     Route::patch('/profile/me', [ProfileController::class, 'update']);        // partial update
+
+    Route::post('/editor/upload-image', [EditorUploadController::class, 'store']);
 
     // Full list for tables
     Route::get('/users', [UserController::class, 'index']);
@@ -54,8 +54,6 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('/papers/{paper}/highlights/apply', [PdfHighlightController::class, 'apply']);
     Route::post('/pdfs/upload', [PdfHighlightController::class, 'store']); // generic
 
-        Route::post('/payment/create-order', [PaymentController::class, 'createOrder']);
-    Route::post('/payment/verify', [PaymentController::class, 'verify']);
 
     Route::get('/dashboard/summary', [DashboardController::class, 'summary']);
     Route::get('/dashboard/series/daily', [DashboardController::class, 'dailySeries']);
@@ -63,9 +61,6 @@ Route::middleware('auth:sanctum')->group(function () {
 
     Route::get('/dashboard/filters', [DashboardController::class, 'filters']);
     Route::get('/dashboard/filters/researchers-by-supervisor', [DashboardController::class, 'researchersBySupervisor']);
-
-    // ✅ Pricing for logged-in user
-    Route::get('/pricing', [PricingController::class, 'forCurrentUser']);
 
     // Papers
     Route::get('/papers', [PaperController::class, 'index']);
@@ -99,6 +94,8 @@ Route::middleware('auth:sanctum')->group(function () {
 
     Route::apiResource('supervisors', SupervisorController::class);
 
+    Route::post('/payment/create-order', [PaymentController::class, 'createOrder']);
+    Route::post('/payment/verify', [PaymentController::class, 'verify']);
 
     // Collections
     Route::get   ('/collections', [CollectionController::class, 'index']);
