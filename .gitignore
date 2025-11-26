@@ -5,3 +5,14 @@ public
 *.log
 library
 .scribe
+composer.lock
+composer.json
+package-lock.json
+package.json
+artisan
+storage
+/storage/*.key
+/storage/app/public
+/storage/debugbar
+/storage/framework/cache/data
+

@@ -44,10 +44,6 @@ class PaperController extends Controller
             $q->where('category', $cat);
         }
 
-<<<<<<< HEAD
-        $per = (int)($req->get('per_page', 25));
-        $p   = $q->latest('id')->paginate($per);
-=======
         // support common variants (snake_case, camelCase, limit)
         $perRaw = $req->get('per_page', $req->get('perPage', $req->get('limit', null)));
         $per = (int) ($perRaw ?: 10);
@@ -67,7 +63,6 @@ class PaperController extends Controller
         if (!in_array($sortBy, $allowed)) { $sortBy = 'title'; }
         $q->orderBy($sortBy, $sortDir);
         $p = $q->paginate($per, ['*'], 'page', $page);
->>>>>>> f7cd52df7aa68d8ff2d0a1db806176f748b88031
 
         return PaperResource::collection($p);
     }

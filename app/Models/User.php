@@ -7,27 +7,18 @@ use Illuminate\Foundation\Auth\User as Authenticatable;
 use Illuminate\Notifications\Notifiable;
 use Laravel\Sanctum\HasApiTokens;
 use App\Models\UserSetting;
-<<<<<<< HEAD
-=======
 use App\Models\Paper;
->>>>>>> f7cd52df7aa68d8ff2d0a1db806176f748b88031
 use Carbon\Carbon;
 
 class User extends Authenticatable
 {
-<<<<<<< HEAD
-=======
     /** @use HasFactory<\Database\Factories\UserFactory> */
->>>>>>> f7cd52df7aa68d8ff2d0a1db806176f748b88031
     use HasApiTokens, HasFactory, Notifiable;
 
     /**
      * The attributes that are mass assignable.
-<<<<<<< HEAD
-=======
      *
      * @var list<string>
->>>>>>> f7cd52df7aa68d8ff2d0a1db806176f748b88031
      */
     protected $fillable = [
         'name',
@@ -38,7 +29,6 @@ class User extends Authenticatable
         'role',
         'status',
         'terms_agreed_at',
-<<<<<<< HEAD
         'subscription_status',
         'plan_key',
         'trial',
@@ -48,21 +38,12 @@ class User extends Authenticatable
         'department',
         'specialization',
         'research_area',
-=======
-
-        // plan fields
-        'plan_key',         // e.g., "researcher-free", "researcher-pro", "supervisor-pro", "admin-university"
-        'plan_expires_at',  // nullable datetime for subscription expiry
->>>>>>> f7cd52df7aa68d8ff2d0a1db806176f748b88031
     ];
 
     /**
      * The attributes that should be hidden for serialization.
-<<<<<<< HEAD
-=======
      *
      * @var list<string>
->>>>>>> f7cd52df7aa68d8ff2d0a1db806176f748b88031
      */
     protected $hidden = [
         'password',
@@ -71,22 +52,18 @@ class User extends Authenticatable
 
     /**
      * Get the attributes that should be cast.
-<<<<<<< HEAD
-=======
      *
      * NOTE: you had a protected function casts() in the original model; preserving that
      * to avoid changing the shape of your codebase. If you prefer the standard
      * protected $casts property, you can switch to that.
      *
      * @return array<string, string>
->>>>>>> f7cd52df7aa68d8ff2d0a1db806176f748b88031
      */
     protected function casts(): array
     {
         return [
             'email_verified_at' => 'datetime',
             'terms_agreed_at'   => 'datetime',
-<<<<<<< HEAD
             'trial_start_date'  => 'datetime',
             'trial_end_date'    => 'datetime',
             'trial'             => 'boolean',
@@ -96,19 +73,12 @@ class User extends Authenticatable
     /**
      * Relationship: User has one settings record
      */
-=======
-            'plan_expires_at'   => 'datetime',
-        ];
-    }
-
->>>>>>> f7cd52df7aa68d8ff2d0a1db806176f748b88031
     public function settings()
     {
         return $this->hasOne(UserSetting::class);
     }
 
     /**
-<<<<<<< HEAD
      * Check if user is on an active trial
      */
     public function isOnTrial(): bool
@@ -178,8 +148,7 @@ class User extends Authenticatable
             'subscription_status' => 'expired',
         ]);
     }
-}
-=======
+    /**
      * Convenience: return the plan key for this user (fallback to 'researcher-free').
      *
      * @return string
@@ -299,4 +268,3 @@ class User extends Authenticatable
         return Carbon::now()->lt(Carbon::parse($this->plan_expires_at));
     }
 }
->>>>>>> f7cd52df7aa68d8ff2d0a1db806176f748b88031
