@@ -1,0 +1,36 @@
+<?php
+
+namespace App\Http\Middleware;
+
+use Closure;
+use Illuminate\Http\Request;
+use Symfony\Component\HttpFoundation\Response;
+
+class CheckTrialStatus
+{
+    /**
+     * Handle an incoming request.
+     * 
+     * Checks if admin user's trial has expired and blocks access to protected routes
+     */
+    public function handle(Request $request, Closure $next): Response
+    {
+        $user = $request->user();
+
+        // Only check for admin users
+        if ($user && $user->role === 'admin') {
+            // If trial has expired, deny access
+            if ($user->isTrialExpired()) {
+                $user->expireTrial(); // Update status in DB
+
+                return response()->json([
+                    'message' => 'Your trial has expired. Please upgrade to continue using admin features.',
+                    'trial_expired' => true,
+                    'upgrade_url' => '/pricing',
+                ], 403);
+            }
+        }
+
+        return $next($request);
+    }
+}

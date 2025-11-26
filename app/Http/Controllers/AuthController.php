@@ -33,8 +33,12 @@ class AuthController extends Controller
         $user = User::whereRaw('LOWER(email) = ?', [$email])->first();
 
         if (!$user || !Hash::check($cred['password'], $user->password)) {
-            // generic message avoids leaking whether the email exists
             return response()->json(['message' => 'Invalid credentials'], 401);
+        }
+
+        // Check if admin trial has expired
+        if ($user->role === 'admin' && $user->isTrialExpired()) {
+            $user->expireTrial();
         }
 
         $token = $user->createToken('auth_token')->plainTextToken;
@@ -47,8 +51,7 @@ class AuthController extends Controller
 
     /**
      * POST /auth/register
-     * Body: name, email, password, password_confirmation, phone?, organization?, terms:true
-     * Response: { token, user }
+     * Handles registration for researcher, supervisor, and admin roles
      */
     public function register(RegisterRequest $request): JsonResponse
     {
@@ -62,33 +65,50 @@ class AuthController extends Controller
             'phone'           => $data['phone'] ?? null,
             'organization'    => $data['organization'] ?? null,
             'status'          => 'active',
-            'role'            => $data['role'],   // <-- use role from request
+            'role'            => $data['role'],
             'terms_agreed_at' => now(),
         ];
 
         // Role-specific mapping to DB columns
         if ($data['role'] === 'researcher') {
-            // nullable in rules
             $attrs['department']    = $data['department'] ?? null;
-            $attrs['research_area'] = $data['researchArea'] ?? null; // camelCase → snake_case
+            $attrs['research_area'] = $data['research_area'] ?? $data['researchArea'] ?? null;
         }
 
         if ($data['role'] === 'supervisor') {
-            // required in rules
-            $attrs['employee_id']   = $data['employeeId'];           // camelCase → snake_case
-            $attrs['department']    = $data['department'];
+            $attrs['employee_id']    = $data['employee_id'] ?? $data['employeeId'];
+            $attrs['department']     = $data['department'];
             $attrs['specialization'] = $data['specialization'] ?? null;
             $attrs['organization']   = $data['organization'] ?? null;
         }
 
         if ($data['role'] === 'admin') {
-            // organization is required in rules
             $attrs['organization'] = $data['organization'];
+            
+            // Handle admin trial signup
+            if (isset($data['trial']) && $data['trial'] == 1) {
+                $attrs['trial'] = true;
+                $attrs['subscription_status'] = 'trial';
+                $attrs['trial_start_date'] = isset($data['trial_start_date']) 
+                    ? Carbon::parse($data['trial_start_date']) 
+                    : Carbon::now();
+                $attrs['trial_end_date'] = isset($data['trial_end_date'])
+                    ? Carbon::parse($data['trial_end_date'])
+                    : Carbon::now()->addDays(30);
+            } else {
+                // Admin without trial needs immediate payment
+                $attrs['subscription_status'] = 'pending_payment';
+                $attrs['trial'] = false;
+            }
+        } else {
+            // Researchers and supervisors get free accounts by default
+            $attrs['subscription_status'] = 'active';
+            $attrs['trial'] = false;
         }
 
         $user = User::create($attrs);
 
-        // default prefs (works if you added $user->settings() hasOne())
+        // Create default user settings
         if (method_exists($user, 'settings')) {
             $user->settings()->create([
                 'citation_style'     => 'chicago-note-bibliography-short',
@@ -110,9 +130,16 @@ class AuthController extends Controller
     /** GET /me */
     public function me(Request $request): JsonResponse
     {
-        return response()->json(new UserResource($request->user()));
+        $user = $request->user();
+        
+        // Auto-update expired trials
+        if ($user->role === 'admin' && $user->isTrialExpired()) {
+            $user->expireTrial();
+            $user->refresh();
+        }
+
+        return response()->json(new UserResource($user));
     }
-    
     
     /** POST /auth/logout */
     public function logout(Request $request): JsonResponse
@@ -123,7 +150,6 @@ class AuthController extends Controller
         }
         return response()->json(['ok' => true]);
     }
-    
     
     public function changePassword(ChangePasswordRequest $request): JsonResponse
     {
@@ -158,7 +184,7 @@ class AuthController extends Controller
     {
         $email = $request->input('email');
     
-        $user = \App\Models\User::where('email', $email)->first();
+        $user = User::where('email', $email)->first();
     
         // For security, we respond success even if user not found
         if (!$user) {
@@ -218,7 +244,7 @@ class AuthController extends Controller
             ], 422);
         }
     
-        $user = \App\Models\User::where('email', $email)->first();
+        $user = User::where('email', $email)->first();
     
         if (!$user) {
             return response()->json([
@@ -237,7 +263,4 @@ class AuthController extends Controller
             'message' => 'Password has been reset successfully.',
         ]);
     }
-
-
-
 }

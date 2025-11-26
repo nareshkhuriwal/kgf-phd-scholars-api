@@ -124,4 +124,27 @@ return [
         'store' => env('APP_MAINTENANCE_STORE', 'database'),
     ],
 
+    /*
+    |--------------------------------------------------------------------------
+    | Admin Trial Configuration
+    |--------------------------------------------------------------------------
+    |
+    | Configuration for admin user trial periods and subscription management.
+    |
+    */
+
+    'trial' => [
+        // Default trial duration in days for admin accounts
+        'duration_days' => env('TRIAL_DURATION_DAYS', 30),
+
+        // Whether to automatically expire trials via cron job
+        'auto_expire' => env('TRIAL_AUTO_EXPIRE', true),
+
+        // Grace period in days after trial expiration before full blocking
+        'grace_period_days' => env('TRIAL_GRACE_PERIOD_DAYS', 0),
+
+        // Send email reminder X days before trial expires
+        'reminder_days_before' => env('TRIAL_REMINDER_DAYS', 7),
+    ],
+
 ];

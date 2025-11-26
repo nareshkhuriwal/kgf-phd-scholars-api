@@ -76,10 +76,10 @@ return [
             'current' => [
                 'key'     => 'admin-current',
                 'title'   => 'Admin',
-                'price'   => '₹499',
+                'price'   => '₹1999',
                 'subtitle'=> 'Central admin access for your university.',
                 'bullets' => [
-                    'Paid plan — no free tier for Admin',
+                    'Paid plan — 30-days free tier for Admin',
                     'Central admin access for your university',
                     'Manage researchers, supervisors & reports in one place',
                     'Unlimited users and researchers',
