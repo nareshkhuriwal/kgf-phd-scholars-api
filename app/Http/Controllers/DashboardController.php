@@ -25,6 +25,10 @@ class DashboardController extends Controller
 
         // resolve which user IDs to aggregate over
         $userIds = $this->resolveDashboardUserIds($req);
+        // if (!in_array($req->user()->id, $userIds, true)) {
+        //     array_unshift($userIds, $req->user()->id); // add at front
+        // }
+
         if (empty($userIds)) {
             return response()->json([
                 'data' => [

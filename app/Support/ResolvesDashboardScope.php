@@ -7,21 +7,6 @@ use Illuminate\Support\Facades\DB;
 
 trait ResolvesDashboardScope
 {
-    /**
-     * Core: resolve which user IDs to aggregate over, based on:
-     *  - authenticated user's role
-     *  - ?scope=
-     *  - ?user_id=
-     *
-     * Supported scopes:
-     *   self
-     *   all
-     *   researcher
-     *   supervisor
-     *   my_researchers
-     *   all_researchers
-     *   all_supervisors
-     */
     protected function resolveDashboardUserIds(Request $req): array
     {
         $user   = $req->user() ?? abort(401, 'Unauthenticated');
@@ -113,7 +98,9 @@ trait ResolvesDashboardScope
                 case 'all':
                 default:
                     // all supervisors + all researchers
+                    // ===> include current user when scope == 'all'
                     return array_values(array_unique(array_merge(
+                        [$user->id], // <-- ensure current user included for all
                         $allByRole('researcher'),
                         $allByRole('supervisor')
                     )));
