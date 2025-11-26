@@ -7,6 +7,8 @@ use Illuminate\Foundation\Auth\User as Authenticatable;
 use Illuminate\Notifications\Notifiable;
 use Laravel\Sanctum\HasApiTokens;
 use App\Models\UserSetting;
+use App\Models\Paper;
+use Carbon\Carbon;
 
 class User extends Authenticatable
 {
@@ -27,6 +29,10 @@ class User extends Authenticatable
         'role',
         'status',
         'terms_agreed_at',
+
+        // plan fields
+        'plan_key',         // e.g., "researcher-free", "researcher-pro", "supervisor-pro", "admin-university"
+        'plan_expires_at',  // nullable datetime for subscription expiry
     ];
 
     /**
@@ -42,14 +48,18 @@ class User extends Authenticatable
     /**
      * Get the attributes that should be cast.
      *
+     * NOTE: you had a protected function casts() in the original model; preserving that
+     * to avoid changing the shape of your codebase. If you prefer the standard
+     * protected $casts property, you can switch to that.
+     *
      * @return array<string, string>
      */
     protected function casts(): array
     {
         return [
             'email_verified_at' => 'datetime',
-            // Do NOT auto-hash here because controller already hashes explicitly
             'terms_agreed_at'   => 'datetime',
+            'plan_expires_at'   => 'datetime',
         ];
     }
 
@@ -58,5 +68,123 @@ class User extends Authenticatable
         return $this->hasOne(UserSetting::class);
     }
 
+    /**
+     * Convenience: return the plan key for this user (fallback to 'researcher-free').
+     *
+     * @return string
+     */
+    public function getPlanKey(): string
+    {
+        return $this->plan_key ?? config('razorpay.default_plan_key', 'researcher-free');
+    }
 
+    /**
+     * Return the plan config array from config('razorpay.plans') for this user.
+     * Falls back to researcher-free defaults if missing.
+     *
+     * @return array
+     */
+    public function getPlanConfig(): array
+    {
+        $plans = config('razorpay.plans', []);
+        $key = $this->getPlanKey();
+
+        if (isset($plans[$key]) && is_array($plans[$key])) {
+            return $plans[$key];
+        }
+
+        // fallback to researcher-free or first plan
+        if (isset($plans['researcher-free'])) {
+            return $plans['researcher-free'];
+        }
+        if (!empty($plans)) {
+            return reset($plans);
+        }
+
+        // last resort minimal defaults
+        return [
+            'max_papers' => 50,
+            'max_reports' => 5,
+            'max_collections' => 2,
+            'unlimited' => false,
+        ];
+    }
+
+    /**
+     * Whether the plan is effectively unlimited.
+     *
+     * @return bool
+     */
+    public function planIsUnlimited(): bool
+    {
+        $cfg = $this->getPlanConfig();
+        if (array_key_exists('unlimited', $cfg)) {
+            return (bool) $cfg['unlimited'];
+        }
+        // treat null max_papers as unlimited
+        return !isset($cfg['max_papers']) || is_null($cfg['max_papers']);
+    }
+
+    /**
+     * Return integer max papers allowed for this plan, or null for unlimited.
+     *
+     * @return int|null
+     */
+    public function planMaxPapers(): ?int
+    {
+        $cfg = $this->getPlanConfig();
+        if (!array_key_exists('max_papers', $cfg)) {
+            return null;
+        }
+        return is_null($cfg['max_papers']) ? null : (int) $cfg['max_papers'];
+    }
+
+    /**
+     * Count how many papers this user has already created.
+     *
+     * @return int
+     */
+    public function papersCount(): int
+    {
+        return Paper::where('created_by', $this->id)->count();
+    }
+
+    /**
+     * Remaining paper slots according to plan (int). If unlimited => PHP_INT_MAX.
+     *
+     * @return int
+     */
+    public function remainingPaperQuota(): int
+    {
+        if ($this->planIsUnlimited()) {
+            return PHP_INT_MAX;
+        }
+        $max = $this->planMaxPapers() ?? 0;
+        $used = $this->papersCount();
+        $rem = (int)$max - (int)$used;
+        return $rem < 0 ? 0 : $rem;
+    }
+
+    /**
+     * Convenience check whether the user can create N more papers (default 1).
+     *
+     * @param int $needed
+     * @return bool
+     */
+    public function canCreatePapers(int $needed = 1): bool
+    {
+        if ($this->planIsUnlimited()) return true;
+        return $this->remainingPaperQuota() >= $needed;
+    }
+
+    /**
+     * Optionally: If you want to check plan expiry.
+     *
+     * @return bool
+     */
+    public function planIsActive(): bool
+    {
+        if (!$this->plan_expires_at) return true; // treat null as active (unless you prefer otherwise)
+        return Carbon::now()->lt(Carbon::parse($this->plan_expires_at));
+    }
 }
