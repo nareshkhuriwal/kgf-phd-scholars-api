@@ -11,11 +11,17 @@
         "laravel/framework": "^12.0",
         "laravel/sanctum": "^4.2",
         "laravel/tinker": "^2.10.1",
+<<<<<<< HEAD
         "phpoffice/phpspreadsheet": "^5.0",
         "phpoffice/phpword": "^1.4",
         "razorpay/razorpay": "^2.9",
         "setasign/fpdi-tcpdf": "^2.3",
         "tecnickcom/tcpdf": "^6.10"
+=======
+        "phpoffice/phppresentation": "^1.2",
+        "phpoffice/phpspreadsheet": "^4.5",
+        "phpoffice/phpword": "^1.4"
+>>>>>>> f7cd52df7aa68d8ff2d0a1db806176f748b88031
     },
     "require-dev": {
         "fakerphp/faker": "^1.23",
@@ -92,5 +98,8 @@
     "minimum-stability": "stable",
     "prefer-stable": true
 }
+<<<<<<< HEAD
  
  
+=======
+>>>>>>> f7cd52df7aa68d8ff2d0a1db806176f748b88031

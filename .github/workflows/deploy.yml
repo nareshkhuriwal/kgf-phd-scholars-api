@@ -1,0 +1,107 @@
+name: Deploy to cPanel (Shared Hosting)
+
+on:
+  push:
+    branches:
+      - main        # change if you use a different deploy branch
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      # 1) Checkout code
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # 2) Setup PHP for Laravel build
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.3'       # adjust to your PHP version on server
+          extensions: mbstring, intl, pdo_mysql, bcmath
+          coverage: none
+
+      # 3) Install composer dependencies (no dev)
+      - name: Install Composer dependencies
+        run: |
+          composer install --no-dev --no-interaction --prefer-dist --optimize-autoloader
+
+      # 4) (Optional) Build frontend assets (if you have them)
+      # Comment this block if you don't have npm / mix / vite
+      - name: Install Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Build frontend assets
+        run: |
+          if [ -f package.json ]; then
+            npm ci
+            # For Laravel Mix:
+            # npm run prod
+            # For Vite:
+            npm run build
+          fi
+
+      # 5) Prepare deployment package (exclude things we don't want on server)
+      - name: Prepare deployment files
+        run: |
+          mkdir deploy
+          rsync -av --exclude=".git" \
+                   --exclude=".github" \
+                   --exclude="node_modules" \
+                   --exclude="tests" \
+                   --exclude=".env" \
+                   --exclude="vendor" \
+                   --exclude="storage" \
+                   --exclude="public" \
+                   ./ ./deploy
+
+      # 6) Upload via FTP to cPanel (updated)
+      - name: Normalize server dir
+        run: |
+          SD="${{ secrets.CPANEL_FTP_PATH }}"
+          if [ -z "$SD" ]; then
+            echo "No CPANEL_FTP_PATH secret set; aborting."
+            exit 1
+          fi
+          case "$SD" in
+            */) echo "SERVER_DIR=$SD" >> $GITHUB_ENV ;;
+            *)  echo "SERVER_DIR=${SD}/" >> $GITHUB_ENV ;;
+          esac
+
+      - name: Show deployment package (local debug)
+        run: |
+          echo "Working dir: $(pwd)"
+          echo "deploy/ listing:"
+          ls -la deploy || echo "deploy/ not found"
+          echo ""
+          # fail if deploy is empty - prevents accidental empty uploads
+          if [ ! -d deploy ] || [ -z "$(ls -A deploy 2>/dev/null)" ]; then
+            echo "Error: deploy/ is missing or empty. Aborting."
+            exit 1
+          fi
+
+      - name: Show SERVER_DIR (masked)
+        run: |
+          # This will be masked in logs if it contains secrets
+          echo "SERVER_DIR=$SERVER_DIR"
+
+      - name: List remote FTP dir (debug)
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y lftp
+          echo "Listing remote: $SERVER_DIR"
+          # cls (ls) remote dir; masked credentials will hide sensitive info in logs
+          lftp -u "${{ secrets.CPANEL_FTP_USERNAME }}","${{ secrets.CPANEL_FTP_PASSWORD }}" "${{ secrets.CPANEL_FTP_HOST }}" -e "cls -la ${SERVER_DIR}; bye" || echo "Remote listing failed (check host/creds)"
+
+      - name: Deploy to cPanel via FTP
+        uses: SamKirkland/FTP-Deploy-Action@v4.3.5
+        with:
+          server: ${{ secrets.CPANEL_FTP_HOST }}
+          username: ${{ secrets.CPANEL_FTP_USERNAME }}
+          password: ${{ secrets.CPANEL_FTP_PASSWORD }}
+          local-dir: ./deploy/          # <-- MUST end with a slash
+          server-dir: ${{ env.SERVER_DIR }}
+          dangerous-clean-slate: false

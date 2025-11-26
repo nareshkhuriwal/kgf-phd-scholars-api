@@ -124,6 +124,7 @@ return [
         'store' => env('APP_MAINTENANCE_STORE', 'database'),
     ],
 
+<<<<<<< HEAD
     /*
     |--------------------------------------------------------------------------
     | Admin Trial Configuration
@@ -148,3 +149,6 @@ return [
     ],
 
 ];
+=======
+];
+>>>>>>> f7cd52df7aa68d8ff2d0a1db806176f748b88031

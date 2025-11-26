@@ -8,7 +8,10 @@ use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Str;
 use Symfony\Component\HttpFoundation\Response;
 use App\Models\Paper;
+<<<<<<< HEAD
 use App\Models\PaperFile;
+=======
+>>>>>>> f7cd52df7aa68d8ff2d0a1db806176f748b88031
 use League\Csv\Reader; // composer require league/csv
 
 class LibraryImportController extends Controller
@@ -34,11 +37,41 @@ class LibraryImportController extends Controller
         $skipped = [];
         $errors  = [];
 
+<<<<<<< HEAD
         // 1) Handle uploaded files
         foreach ($files as $file) {
             try {
                 $paper = $this->storeUploadedPaper($request, $file);
                 $created[] = $paper->fresh('files');
+=======
+        // --- plan / quota from User model helpers ---
+        $user = $request->user() ?? abort(401, 'Unauthenticated');
+
+        // Optional: disallow imports if plan expired
+        if (method_exists($user, 'planIsActive') && ! $user->planIsActive()) {
+            return response()->json([
+                'message' => 'Your subscription/plan has expired. Please renew to continue importing.',
+            ], Response::HTTP_FORBIDDEN);
+        }
+
+        // remaining slots (model returns PHP_INT_MAX for unlimited)
+        $remaining = method_exists($user, 'remainingPaperQuota') ? $user->remainingPaperQuota() : PHP_INT_MAX;
+
+        // 1) Handle uploaded files
+        foreach ($files as $file) {
+            if ($remaining <= 0) {
+                $skipped[] = [
+                    'name' => $file->getClientOriginalName(),
+                    'reason' => 'Upload quota exceeded for your plan',
+                ];
+                continue;
+            }
+
+            try {
+                $paper = $this->storeUploadedPaper($request, $file);
+                $created[] = $paper->fresh('files');
+                $remaining--;
+>>>>>>> f7cd52df7aa68d8ff2d0a1db806176f748b88031
             } catch (\Throwable $e) {
                 $errors[] = ['name' => $file->getClientOriginalName(), 'error' => $e->getMessage()];
             }
@@ -46,10 +79,26 @@ class LibraryImportController extends Controller
 
         // 2) Handle URLs (download, then attach)
         foreach ($sources['urls'] as $url) {
+<<<<<<< HEAD
             try {
                 $paper = $this->importFromUrl($request, $url);
                 if ($paper) $created[] = $paper->fresh('files');
                 else $skipped[] = ['url' => $url, 'reason' => 'Unsupported or empty'];
+=======
+            if ($remaining <= 0) {
+                $skipped[] = ['url' => $url, 'reason' => 'Upload quota exceeded for your plan'];
+                continue;
+            }
+
+            try {
+                $paper = $this->importFromUrl($request, $url);
+                if ($paper) {
+                    $created[] = $paper->fresh('files');
+                    $remaining--;
+                } else {
+                    $skipped[] = ['url' => $url, 'reason' => 'Unsupported or empty'];
+                }
+>>>>>>> f7cd52df7aa68d8ff2d0a1db806176f748b88031
             } catch (\Throwable $e) {
                 $errors[] = ['url' => $url, 'error' => $e->getMessage()];
             }
@@ -60,9 +109,21 @@ class LibraryImportController extends Controller
             try {
                 $entries = $this->parseBibOrRis($sources['bibtex']);
                 foreach ($entries as $entry) {
+<<<<<<< HEAD
                     try {
                         $paper = $this->createPaperFromEntry($request, $entry);
                         $created[] = $paper->fresh('files');
+=======
+                    if ($remaining <= 0) {
+                        $skipped[] = ['entry' => $entry['title'] ?? '(unknown)', 'reason' => 'Upload quota exceeded for your plan'];
+                        continue;
+                    }
+
+                    try {
+                        $paper = $this->createPaperFromEntry($request, $entry);
+                        $created[] = $paper->fresh('files');
+                        $remaining--;
+>>>>>>> f7cd52df7aa68d8ff2d0a1db806176f748b88031
                     } catch (\Throwable $e) {
                         $errors[] = ['entry' => $entry['title'] ?? '(unknown)', 'error' => $e->getMessage()];
                     }
@@ -75,7 +136,11 @@ class LibraryImportController extends Controller
         // 4) Handle CSV (title,authors,year,doi,url,pdf_url,…)
         if ($csvFile instanceof UploadedFile) {
             try {
+<<<<<<< HEAD
                 [$c2, $s2, $e2] = $this->importFromCsv($request, $csvFile);
+=======
+                [$c2, $s2, $e2] = $this->importFromCsvWithQuota($request, $csvFile, $remaining);
+>>>>>>> f7cd52df7aa68d8ff2d0a1db806176f748b88031
                 array_push($created, ...$c2);
                 array_push($skipped, ...$s2);
                 array_push($errors,  ...$e2);
@@ -355,6 +420,13 @@ class LibraryImportController extends Controller
 
     /* ---------------- CSV (Option-B) ---------------- */
 
+<<<<<<< HEAD
+=======
+    /**
+     * Original CSV importer (kept for backward compatibility if used elsewhere).
+     * Returns [$created, $skipped, $errors]
+     */
+>>>>>>> f7cd52df7aa68d8ff2d0a1db806176f748b88031
     private function importFromCsv(Request $request, UploadedFile $csvFile): array
     {
         $reader = Reader::createFromPath($csvFile->getRealPath(), 'r');
@@ -387,7 +459,11 @@ class LibraryImportController extends Controller
                             $disk   = 'uploads';
                             $subdir = now()->format('Y/m');
                             $orig   = basename(parse_url($row['pdf_url'], PHP_URL_PATH) ?: 'paper.pdf');
+<<<<<<< HEAD
                             $path   = "library/{$subdir}/".Str::random(10)."_".$orig; // (no uploads/ prefix)
+=======
+                            $path   = "library/{$subdir}/".Str::random(10)."_".$orig;
+>>>>>>> f7cd52df7aa68d8ff2d0a1db806176f748b88031
 
                             Storage::disk($disk)->put($path, $bytes);
 
@@ -414,6 +490,80 @@ class LibraryImportController extends Controller
         return [$created, $skipped, $errors];
     }
 
+<<<<<<< HEAD
+=======
+    /**
+     * CSV importer that respects remaining quota.
+     * $remaining passed by reference and decremented for each created paper.
+     * Returns [$created, $skipped, $errors]
+     */
+    private function importFromCsvWithQuota(Request $request, UploadedFile $csvFile, int &$remaining): array
+    {
+        $reader = Reader::createFromPath($csvFile->getRealPath(), 'r');
+        $reader->setHeaderOffset(0);
+        $created = []; $skipped = []; $errors = [];
+
+        foreach ($reader->getRecords() as $row) {
+            if ($remaining <= 0) {
+                $skipped[] = ['row' => $row, 'reason' => 'Upload quota exceeded for your plan'];
+                continue;
+            }
+
+            try {
+                $title = trim($row['title'] ?? '');
+                if ($title === '') { $skipped[] = ['row' => $row, 'reason' => 'Missing title']; continue; }
+
+                // 1) Create paper first
+                $paper = Paper::create([
+                    'title'      => $title,
+                    'authors'    => $row['authors'] ?? null,
+                    'year'       => $row['year'] ?? null,
+                    'doi'        => $row['doi'] ?? null,
+                    'url'        => $row['url'] ?? null,
+                    'created_by' => $request->user()->id ?? null,
+                    'source'     => 'csv',
+                ]);
+
+                // 2) Fetch and attach pdf_url if present
+                if (!empty($row['pdf_url'])) {
+                    try {
+                        $resp = Http::timeout(20)->get($row['pdf_url']);
+                        if ($resp->ok() && strlen($resp->body())) {
+                            $bytes  = $resp->body();
+                            $mime   = $resp->header('Content-Type', 'application/pdf');
+                            $disk   = 'uploads';
+                            $subdir = now()->format('Y/m');
+                            $orig   = basename(parse_url($row['pdf_url'], PHP_URL_PATH) ?: 'paper.pdf');
+                            $path   = "library/{$subdir}/".Str::random(10)."_".$orig;
+
+                            Storage::disk($disk)->put($path, $bytes);
+
+                            $paper->files()->create([
+                                'disk'          => $disk,
+                                'path'          => $path,
+                                'original_name' => $orig,
+                                'mime'          => $mime,
+                                'size_bytes'    => strlen($bytes),
+                                'checksum'      => hash('sha256', $bytes),
+                                'uploaded_by'   => $request->user()->id ?? null,
+                            ]);
+                        }
+                    } catch (\Throwable $e) {
+                        $errors[] = ['row' => $row, 'error' => 'pdf_url fetch failed: '.$e->getMessage()];
+                    }
+                }
+
+                $created[] = $paper->fresh('files');
+                $remaining--;
+            } catch (\Throwable $e) {
+                $errors[] = ['row' => $row, 'error' => $e->getMessage()];
+            }
+        }
+
+        return [$created, $skipped, $errors];
+    }
+
+>>>>>>> f7cd52df7aa68d8ff2d0a1db806176f748b88031
     /* ---------------- Helpers ---------------- */
 
     private function titleFromFilename(string $name): string
