@@ -20,8 +20,10 @@ use App\Http\Controllers\ProfileController;
 use App\Http\Controllers\PdfHighlightController;
 use App\Http\Controllers\ResearcherInviteController;
 use App\Http\Controllers\SupervisorController;
-use App\Http\Controllers\EditorUploadController;
+use App\Http\Controllers\PricingController;   // ✅ NEW
 use App\Http\Controllers\PaymentController;
+
+use App\Http\Controllers\EditorUploadController;
 
 
 // Public or rate-limited auth endpoints
@@ -31,6 +33,7 @@ Route::post('/auth/register', [AuthController::class, 'register']);   // public
 // Forgot password via OTP
 Route::post('forgot-password/otp', [AuthController::class, 'sendPasswordOtp']);
 Route::post('reset-password/otp', [AuthController::class, 'resetPasswordWithOtp']);
+
 
 
 Route::middleware('auth:sanctum')->group(function () {
@@ -54,13 +57,19 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('/papers/{paper}/highlights/apply', [PdfHighlightController::class, 'apply']);
     Route::post('/pdfs/upload', [PdfHighlightController::class, 'store']); // generic
 
-
     Route::get('/dashboard/summary', [DashboardController::class, 'summary']);
     Route::get('/dashboard/series/daily', [DashboardController::class, 'dailySeries']);
     Route::get('/dashboard/series/weekly', [DashboardController::class, 'weeklySeries']);
 
     Route::get('/dashboard/filters', [DashboardController::class, 'filters']);
     Route::get('/dashboard/filters/researchers-by-supervisor', [DashboardController::class, 'researchersBySupervisor']);
+
+    // ✅ Pricing for logged-in user
+    Route::get('/pricing', [PricingController::class, 'forCurrentUser']);
+
+    Route::get('/pricing/all', [PricingController::class, 'all']);
+    Route::get('/pricing/roles/{role}', [PricingController::class, 'showByRole']);
+
 
     // Papers
     Route::get('/papers', [PaperController::class, 'index']);

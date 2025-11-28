@@ -39,6 +39,11 @@ class RegisterRequest extends FormRequest
 
         if ($role === 'admin') {
             $rules['organization'] = ['required', 'string', 'max:150'];
+                        
+            $rules['trial'] = ['nullable', 'integer', 'in:0,1'];
+            $rules['trial_start_date'] = ['nullable', 'date'];
+            $rules['trial_end_date'] = ['nullable', 'date', 'after:trial_start_date'];
+
             // $rules['adminCode'] = ['required', 'string', function ($attribute, $value, $fail) {
             //     // Verify admin code against environment variable or database
             //     $validAdminCode = config('auth.admin_registration_code');

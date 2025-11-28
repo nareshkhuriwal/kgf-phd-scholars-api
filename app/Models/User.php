@@ -29,10 +29,15 @@ class User extends Authenticatable
         'role',
         'status',
         'terms_agreed_at',
-
-        // plan fields
-        'plan_key',         // e.g., "researcher-free", "researcher-pro", "supervisor-pro", "admin-university"
-        'plan_expires_at',  // nullable datetime for subscription expiry
+        'subscription_status',
+        'plan_key',
+        'trial',
+        'trial_start_date',
+        'trial_end_date',
+        'employee_id',
+        'department',
+        'specialization',
+        'research_area',
     ];
 
     /**
@@ -59,15 +64,90 @@ class User extends Authenticatable
         return [
             'email_verified_at' => 'datetime',
             'terms_agreed_at'   => 'datetime',
-            'plan_expires_at'   => 'datetime',
+            'trial_start_date'  => 'datetime',
+            'trial_end_date'    => 'datetime',
+            'trial'             => 'boolean',
         ];
     }
 
+    /**
+     * Relationship: User has one settings record
+     */
     public function settings()
     {
         return $this->hasOne(UserSetting::class);
     }
 
+    /**
+     * Check if user is on an active trial
+     */
+    public function isOnTrial(): bool
+    {
+        return $this->trial 
+            && $this->subscription_status === 'trial'
+            && $this->trial_end_date 
+            && Carbon::parse($this->trial_end_date)->isFuture();
+    }
+
+    /**
+     * Check if user's trial has expired
+     */
+    public function isTrialExpired(): bool
+    {
+        return $this->trial 
+            && $this->trial_end_date 
+            && Carbon::parse($this->trial_end_date)->isPast();
+    }
+
+    /**
+     * Get days remaining in trial
+     */
+    public function trialDaysRemaining(): int
+    {
+        if (!$this->isOnTrial()) {
+            return 0;
+        }
+        
+        $now = Carbon::now();
+        $end = Carbon::parse($this->trial_end_date);
+        return (int) $now->diffInDays($end, false);
+    }
+
+    /**
+     * Activate trial for admin user (30 days)
+     */
+    public function activateTrial(int $days = 30): void
+    {
+        $this->update([
+            'trial' => true,
+            'subscription_status' => 'trial',
+            'trial_start_date' => Carbon::now(),
+            'trial_end_date' => Carbon::now()->addDays($days),
+        ]);
+    }
+
+    /**
+     * Upgrade user from trial to paid
+     */
+    public function upgradeToPaid(string $planKey): void
+    {
+        $this->update([
+            'trial' => false,
+            'subscription_status' => 'active',
+            'plan_key' => $planKey,
+            // Keep trial dates for record keeping
+        ]);
+    }
+
+    /**
+     * Mark trial as expired
+     */
+    public function expireTrial(): void
+    {
+        $this->update([
+            'subscription_status' => 'expired',
+        ]);
+    }
     /**
      * Convenience: return the plan key for this user (fallback to 'researcher-free').
      *
