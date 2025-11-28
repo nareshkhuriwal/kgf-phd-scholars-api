@@ -1,9 +1,0 @@
-<IfModule mod_rewrite.c>
-    RewriteEngine On
-
-    # If the request is not already pointing to /public
-    RewriteCond %{REQUEST_URI} !^/kgf-phd-scholars-api/public/
-
-    # Redirect everything into /public
-    RewriteRule ^(.*)$ public/$1 [L,QSA]
-</IfModule>
