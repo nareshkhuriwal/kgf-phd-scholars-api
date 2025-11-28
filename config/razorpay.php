@@ -1,4 +1,5 @@
 <?php
+
 return [
     'key_id'     => env('RAZORPAY_KEY_ID'),
     'key_secret' => env('RAZORPAY_KEY_SECRET'),
@@ -6,6 +7,14 @@ return [
 
     // Whitelist of allowed plans and their amounts (in paise)
     'plans' => [
+
+        // admin plan (if you ever sell via Razorpay)
+        'admin-current' => [
+            'amount' => 49900,           // ₹499.00
+            'label'  => 'Admin',
+            'duration_days' => 30,
+        ],
+            
         // researcher (free)
         'researcher-free' => [
             'amount' => 0,
