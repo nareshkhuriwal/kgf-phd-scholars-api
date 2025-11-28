@@ -20,16 +20,12 @@ use App\Http\Controllers\ProfileController;
 use App\Http\Controllers\PdfHighlightController;
 use App\Http\Controllers\ResearcherInviteController;
 use App\Http\Controllers\SupervisorController;
-<<<<<<< HEAD
 use App\Http\Controllers\PricingController;   // ✅ NEW
 use App\Http\Controllers\PaymentController;
 
-=======
 use App\Http\Controllers\EditorUploadController;
-use App\Http\Controllers\PaymentController;
 
 
->>>>>>> f7cd52df7aa68d8ff2d0a1db806176f748b88031
 // Public or rate-limited auth endpoints
 Route::post('/auth/login', [AuthController::class, 'login']);
 Route::post('/auth/register', [AuthController::class, 'register']);   // public
@@ -38,12 +34,7 @@ Route::post('/auth/register', [AuthController::class, 'register']);   // public
 Route::post('forgot-password/otp', [AuthController::class, 'sendPasswordOtp']);
 Route::post('reset-password/otp', [AuthController::class, 'resetPasswordWithOtp']);
 
-<<<<<<< HEAD
-// ✅ Public pricing endpoints
-Route::get('/pricing/all', [PricingController::class, 'all']);
-Route::get('/pricing/roles/{role}', [PricingController::class, 'showByRole']);
-=======
->>>>>>> f7cd52df7aa68d8ff2d0a1db806176f748b88031
+
 
 Route::middleware('auth:sanctum')->group(function () {
     Route::get('/auth/me', [AuthController::class, 'me']);
@@ -53,11 +44,8 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::put('/profile/me', [ProfileController::class, 'update']);          // update profile
     Route::patch('/profile/me', [ProfileController::class, 'update']);        // partial update
 
-<<<<<<< HEAD
-=======
     Route::post('/editor/upload-image', [EditorUploadController::class, 'store']);
 
->>>>>>> f7cd52df7aa68d8ff2d0a1db806176f748b88031
     // Full list for tables
     Route::get('/users', [UserController::class, 'index']);
     // Lightweight dropdown for Reports builder
@@ -69,12 +57,6 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('/papers/{paper}/highlights/apply', [PdfHighlightController::class, 'apply']);
     Route::post('/pdfs/upload', [PdfHighlightController::class, 'store']); // generic
 
-<<<<<<< HEAD
-        Route::post('/payment/create-order', [PaymentController::class, 'createOrder']);
-    Route::post('/payment/verify', [PaymentController::class, 'verify']);
-=======
->>>>>>> f7cd52df7aa68d8ff2d0a1db806176f748b88031
-
     Route::get('/dashboard/summary', [DashboardController::class, 'summary']);
     Route::get('/dashboard/series/daily', [DashboardController::class, 'dailySeries']);
     Route::get('/dashboard/series/weekly', [DashboardController::class, 'weeklySeries']);
@@ -82,12 +64,13 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('/dashboard/filters', [DashboardController::class, 'filters']);
     Route::get('/dashboard/filters/researchers-by-supervisor', [DashboardController::class, 'researchersBySupervisor']);
 
-<<<<<<< HEAD
     // ✅ Pricing for logged-in user
     Route::get('/pricing', [PricingController::class, 'forCurrentUser']);
 
-=======
->>>>>>> f7cd52df7aa68d8ff2d0a1db806176f748b88031
+    Route::get('/pricing/all', [PricingController::class, 'all']);
+    Route::get('/pricing/roles/{role}', [PricingController::class, 'showByRole']);
+
+
     // Papers
     Route::get('/papers', [PaperController::class, 'index']);
     Route::post('/papers', [PaperController::class, 'store']);
@@ -120,11 +103,8 @@ Route::middleware('auth:sanctum')->group(function () {
 
     Route::apiResource('supervisors', SupervisorController::class);
 
-<<<<<<< HEAD
-=======
     Route::post('/payment/create-order', [PaymentController::class, 'createOrder']);
     Route::post('/payment/verify', [PaymentController::class, 'verify']);
->>>>>>> f7cd52df7aa68d8ff2d0a1db806176f748b88031
 
     // Collections
     Route::get   ('/collections', [CollectionController::class, 'index']);

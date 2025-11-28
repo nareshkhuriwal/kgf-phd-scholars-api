@@ -1,8 +1,5 @@
 <?php
-<<<<<<< HEAD
 
-=======
->>>>>>> f7cd52df7aa68d8ff2d0a1db806176f748b88031
 return [
     'key_id'     => env('RAZORPAY_KEY_ID'),
     'key_secret' => env('RAZORPAY_KEY_SECRET'),
@@ -10,27 +7,14 @@ return [
 
     // Whitelist of allowed plans and their amounts (in paise)
     'plans' => [
-<<<<<<< HEAD
-        // researcher upgrade
-        'researcher-upgrade' => [
-            'amount' => 14900,           // ₹149.00 -> 149 * 100
-            'label'  => 'Researcher Pro',
-            'duration_days' => 30,
-        ],
-
-        // supervisor upgrade
-        'supervisor-upgrade' => [
-            'amount' => 24900,           // ₹249.00
-            'label'  => 'Supervisor Pro',
-            'duration_days' => 30,
-        ],
 
         // admin plan (if you ever sell via Razorpay)
         'admin-current' => [
             'amount' => 49900,           // ₹499.00
             'label'  => 'Admin',
             'duration_days' => 30,
-=======
+        ],
+            
         // researcher (free)
         'researcher-free' => [
             'amount' => 0,
@@ -90,7 +74,6 @@ return [
             'max_collections' => null,
             'managed_researchers' => null,
             'unlimited' => true,
->>>>>>> f7cd52df7aa68d8ff2d0a1db806176f748b88031
         ],
     ],
 ];
