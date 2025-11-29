@@ -30,6 +30,8 @@ use App\Http\Controllers\MonitoringController;
 // Public or rate-limited auth endpoints
 Route::post('/auth/login', [AuthController::class, 'login']);
 Route::post('/auth/register', [AuthController::class, 'register']);   // public
+Route::post('/auth/send-register-otp', [AuthController::class, 'sendRegisterOtp']);
+Route::post('/auth/verify-register-otp', [AuthController::class, 'verifyRegisterOtp']);
 
 // Forgot password via OTP
 Route::post('forgot-password/otp', [AuthController::class, 'sendPasswordOtp']);
@@ -53,6 +55,7 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::delete('/profile/avatar', [ProfileController::class, 'removeAvatar']);
 
     Route::post('/editor/upload-image', [EditorUploadController::class, 'store']);
+
 
     // Full list for tables
     Route::get('/users', [UserController::class, 'index']);
