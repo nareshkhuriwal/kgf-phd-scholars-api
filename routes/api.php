@@ -24,6 +24,7 @@ use App\Http\Controllers\PricingController;   // ✅ NEW
 use App\Http\Controllers\PaymentController;
 
 use App\Http\Controllers\EditorUploadController;
+use App\Http\Controllers\MonitoringController;
 
 
 // Public or rate-limited auth endpoints
@@ -35,11 +36,15 @@ Route::post('forgot-password/otp', [AuthController::class, 'sendPasswordOtp']);
 Route::post('reset-password/otp', [AuthController::class, 'resetPasswordWithOtp']);
 
 
+// Route::middleware(['auth:sanctum','role:super_admin'])->get('/monitoring/analytics', [MonitoringController::class, 'analytics']);
 
 Route::middleware('auth:sanctum')->group(function () {
     Route::get('/auth/me', [AuthController::class, 'me']);
     Route::post('/auth/logout', [AuthController::class, 'logout']);
     Route::post('auth/change-password', [AuthController::class, 'changePassword']);
+
+    Route::get('/monitoring/analytics', [MonitoringController::class, 'analytics'])
+     ->middleware(['auth:sanctum', 'role:super_admin']);
 
     Route::put('/profile/me', [ProfileController::class, 'update']);          // update profile
     Route::patch('/profile/me', [ProfileController::class, 'update']);        // partial update

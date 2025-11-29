@@ -14,6 +14,11 @@ return Application::configure(basePath: dirname(__DIR__))
     ->withMiddleware(function (Middleware $middleware): void {
         // you can add middleware config here if needed
         // e.g. $middleware->api([...]);
+        $middleware->alias([
+            'role' => \App\Http\Middleware\EnsureRole::class,
+            'check.trial' => \App\Http\Middleware\CheckTrialStatus::class, // <-- add this
+
+        ]);
     })
     ->withExceptions(function (Exceptions $exceptions): void {
         //
