@@ -28,6 +28,10 @@ class MonitoringController extends Controller
         $total_payments_amount = (int) Payment::sum('amount'); // amount in paise
         $created_payments_count = Payment::count(); // same as total (or adapt if you have different states)
         $successful_payments_count = Payment::where('status', 'paid')->count();
+        // sum only paid payments
+        $total_paid_amount = (int) Payment::where('status', 'paid')->sum('amount'); // paise
+        $total_paid_amount_inr = number_format($total_paid_amount / 100, 2, '.', '');
+
 
         // breakdown by status
         $payment_status_breakdown = Payment::select('status', DB::raw('count(*) as count'))
@@ -79,12 +83,16 @@ class MonitoringController extends Controller
             'total_super_admins' => $total_super_admins,
             'total_payments_count' => $total_payments_count,
             'total_payments_amount' => $total_payments_amount,
+            'total_payments_amount_inr'  => number_format($total_payments_amount / 100, 2, '.', ''), // all payments in INR
             'created_payments_count' => $created_payments_count,
             'successful_payments_count' => $successful_payments_count,
             'payment_status_breakdown' => $payment_status_breakdown,
             'payments_over_time' => $payments_over_time,
             'plans_by_revenue' => $plans_by_revenue,
             'recent_payments' => $recent_payments,
+            'total_paid_amount'          => $total_paid_amount,                 // paise
+            'total_paid_amount_inr'      => $total_paid_amount_inr,             // INR string
+
         ]);
     }
 }
