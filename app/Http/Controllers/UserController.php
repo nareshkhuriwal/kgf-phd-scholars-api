@@ -90,6 +90,17 @@ class UserController extends Controller
     }
 
     /**
+     * GET /users/{user}
+     * Return single user (safe fields). This method is non-breaking addition used by monitoring.
+     */
+    public function show(User $user)
+    {
+        // hide sensitive attributes via resource or directly
+        // UserResource should handle attribute hiding; here we just return resource
+        return new UserResource($user);
+    }
+
+    /**
      * GET /reports/users  (lightweight options for dropdowns)
      * Optional: search, per_page=all
      */
