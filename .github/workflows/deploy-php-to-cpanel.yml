@@ -1,4 +1,4 @@
-name: Deploy to cPanel (Shared Hosting)
+name: Deploy KGF Scholars Backend to cPanel (Shared Hosting)
 
 on:
   push:
