@@ -43,6 +43,9 @@ Route::middleware('auth:sanctum')->group(function () {
 
     Route::put('/profile/me', [ProfileController::class, 'update']);          // update profile
     Route::patch('/profile/me', [ProfileController::class, 'update']);        // partial update
+    // avatar upload / delete
+    Route::post('/profile/avatar', [ProfileController::class, 'avatar']);
+    Route::delete('/profile/avatar', [ProfileController::class, 'removeAvatar']);
 
     Route::post('/editor/upload-image', [EditorUploadController::class, 'store']);
 

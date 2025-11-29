@@ -4,6 +4,8 @@ namespace App\Http\Resources;
 
 use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\JsonResource;
+use Illuminate\Support\Facades\Storage;
+use Illuminate\Support\Str;
 
 class UserResource extends JsonResource
 {
@@ -24,7 +26,16 @@ class UserResource extends JsonResource
             'status'               => $this->status,
             'email_verified_at'    => $this->email_verified_at,
             'terms_agreed_at'      => $this->terms_agreed_at,
-            
+            'avatar' => $this->when($this->avatar, function () {
+                $disk = config('filesystems.avatar_disk', 'public');
+                // If avatar is already a full URL, return as-is
+                if (Str::startsWith($this->avatar, ['http://', 'https://'])) {
+                    return $this->avatar;
+                }
+                // Otherwise return Storage URL
+                return Storage::disk($disk)->url($this->avatar);
+            }, null),
+
             // Subscription & Trial fields
             'subscription_status'  => $this->subscription_status,
             'plan_key'             => $this->plan_key,

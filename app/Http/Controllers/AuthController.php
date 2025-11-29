@@ -73,6 +73,7 @@ class AuthController extends Controller
         if ($data['role'] === 'researcher') {
             $attrs['department']    = $data['department'] ?? null;
             $attrs['research_area'] = $data['research_area'] ?? $data['researchArea'] ?? null;
+            $attrs['plan_key'] = 'researcher-free';
         }
 
         if ($data['role'] === 'supervisor') {
@@ -80,6 +81,7 @@ class AuthController extends Controller
             $attrs['department']     = $data['department'];
             $attrs['specialization'] = $data['specialization'] ?? null;
             $attrs['organization']   = $data['organization'] ?? null;
+            $attrs['plan_key'] = 'supervisor-free';
         }
 
         if ($data['role'] === 'admin') {
@@ -89,6 +91,7 @@ class AuthController extends Controller
             if (isset($data['trial']) && $data['trial'] == 1) {
                 $attrs['trial'] = true;
                 $attrs['subscription_status'] = 'trial';
+                $attrs['plan_key'] = 'admin-trial';
                 $attrs['trial_start_date'] = isset($data['trial_start_date']) 
                     ? Carbon::parse($data['trial_start_date']) 
                     : Carbon::now();
