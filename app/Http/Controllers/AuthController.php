@@ -9,6 +9,7 @@ use App\Http\Requests\Auth\ResetPasswordWithOtpRequest;
 use App\Http\Requests\Auth\ChangePasswordRequest;
 use App\Http\Resources\UserResource;
 use App\Mail\PasswordOtpMail;
+use App\Mail\RegisterOtpMail;
 
 use App\Models\User;
 use Illuminate\Http\JsonResponse;
@@ -266,4 +267,127 @@ class AuthController extends Controller
             'message' => 'Password has been reset successfully.',
         ]);
     }
+
+
+    /**
+     * POST /auth/send-register-otp
+     * body: { email: string, name?: string }
+     */
+    public function sendRegisterOtp(Request $request)
+    {
+        $data = $request->validate([
+            'email' => ['required','email'],
+            'name'  => ['nullable','string'],
+        ]);
+
+        $email = strtolower(trim($data['email']));
+        $name  = $data['name'] ?? null;
+
+        // If user already exists and is email_verified (flag on users table?), do not send
+        $user = User::whereRaw('LOWER(email) = ?', [$email])->first();
+        if ($user && ($user->email_verified_at || $user->subscription_status === 'active')) {
+            // if your users table uses email_verified_at or a boolean, check accordingly
+            return response()->json([
+                'message' => 'Email already verified. You can proceed.'
+            ]);
+        }
+
+        // Cooldown prevention: if token created less than 60 seconds ago, ask to wait
+        $existing = DB::table('email_verification_tokens')->where('email', $email)->first();
+        if ($existing) {
+            $created = Carbon::parse($existing->created_at);
+            if ($created->gt(Carbon::now()->subSeconds(60))) {
+                return response()->json([
+                    'message' => 'OTP recently sent. Please wait a moment before requesting again.'
+                ], 429);
+            }
+        }
+
+        // Generate OTP
+        $otp = (string) random_int(100000, 999999);
+
+        DB::table('email_verification_tokens')->updateOrInsert(
+            ['email' => $email],
+            [
+                'token'      => Hash::make($otp),
+                'created_at' => Carbon::now(),
+            ]
+        );
+
+        // Send the mail (fire-and-forget; you can queue if desired)
+        $dummyUser = (object) ['name' => $name ?? null]; // mail template expects $user->name
+        try {
+            Mail::to($email)->send(new RegisterOtpMail($dummyUser, $otp));
+        } catch (\Exception $e) {
+            // Log and return generic error
+            \Log::error('Failed to send register OTP: '.$e->getMessage());
+            return response()->json([
+                'message' => 'Failed to send OTP. Please try later.'
+            ], 500);
+        }
+
+        return response()->json([
+            'message' => 'If an account exists for this email, a verification code was sent.',
+        ]);
+    }
+
+    /**
+     * POST /auth/verify-register-otp
+     * body: { email: string, otp: string }
+     */
+    public function verifyRegisterOtp(Request $request)
+    {
+        $data = $request->validate([
+            'email' => ['required','email'],
+            'otp'   => ['required','string']
+        ]);
+
+        $email = strtolower(trim($data['email']));
+        $otp   = $data['otp'];
+
+        $record = DB::table('email_verification_tokens')->where('email', $email)->first();
+        if (!$record) {
+            return response()->json([
+                'message' => 'Invalid or expired OTP.',
+                'errors' => ['otp' => ['Invalid or expired OTP.']],
+            ], 422);
+        }
+
+        // Expire after 15 minutes
+        $created = Carbon::parse($record->created_at);
+        if ($created->lt(Carbon::now()->subMinutes(15))) {
+            DB::table('email_verification_tokens')->where('email', $email)->delete();
+            return response()->json([
+                'message' => 'OTP has expired. Please request a new one.',
+                'errors'  => ['otp' => ['OTP has expired.']],
+            ], 422);
+        }
+
+        if (!Hash::check($otp, $record->token)) {
+            return response()->json([
+                'message' => 'Invalid OTP provided.',
+                'errors'  => ['otp' => ['Invalid OTP.']],
+            ], 422);
+        }
+
+        // Mark as verified — two options:
+        // Option A: If a user already exists, set email_verified_at
+        // Option B: Otherwise, keep token as proof that frontend can submit registration without OTP
+        $user = User::whereRaw('LOWER(email) = ?', [$email])->first();
+        if ($user) {
+            $user->email_verified_at = $user->email_verified_at ?: Carbon::now();
+            $user->save();
+        }
+
+        // Remove token after successful verification
+        DB::table('email_verification_tokens')->where('email', $email)->delete();
+
+        return response()->json([
+            'message'  => 'Email verified successfully.',
+            'verified' => true,
+        ]);
+    }
+
+
+
 }
