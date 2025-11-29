@@ -21,6 +21,68 @@ class PaymentController extends Controller
     }
 
     /**
+     * GET /api/payments
+     * Server-side paging + search + sorting for monitoring
+     * Query params: q, page, per_page, sort_by, sort_dir
+     */
+    public function index(Request $request)
+    {
+        $perPage = (int) $request->get('per_page', 25);
+        $perPage = $perPage > 0 && $perPage <= 500 ? $perPage : 25;
+
+        $q = $request->get('q', null);
+        $sortBy = $request->get('sort_by', 'created_at');
+        $sortDir = strtolower($request->get('sort_dir', 'desc')) === 'asc' ? 'asc' : 'desc';
+
+        // base query - select payments.* to avoid ambiguous column errors
+        $query = Payment::query()
+            ->select('payments.*')
+            // join users so we can filter/search on user name/email
+            ->leftJoin('users', 'users.id', '=', 'payments.user_id')
+            // still eager-load the relation so response contains `user` object
+            ->with('user:id,name,email');
+
+        if ($q) {
+            $query->where(function ($sub) use ($q) {
+                $sub->where('payments.razorpay_order_id', 'like', "%{$q}%")
+                    ->orWhere('payments.razorpay_payment_id', 'like', "%{$q}%")
+                    ->orWhere('payments.currency', 'like', "%{$q}%")
+                    // match numeric id too
+                    ->orWhere('payments.user_id', $q)
+                    // search in joined users table (name / email)
+                    ->orWhere('users.name', 'like', "%{$q}%")
+                    ->orWhere('users.email', 'like', "%{$q}%");
+            });
+        }
+
+        // allow only whitelisted sort columns
+        $allowedSort = ['id', 'amount', 'currency', 'status', 'created_at'];
+        if (!in_array($sortBy, $allowedSort)) {
+            $sortBy = 'created_at';
+        }
+
+        // groupBy payments.id to avoid duplicate rows when join matches multiple rows (defensive)
+        $paginator = $query
+            ->groupBy('payments.id')
+            ->orderBy("payments.{$sortBy}", $sortDir)
+            ->paginate($perPage)
+            ->appends($request->query());
+
+        return response()->json($paginator);
+    }
+
+
+    /**
+     * GET /api/payments/{payment}
+     * Return single payment with user (monitoring)
+     */
+    public function show(Payment $payment)
+    {
+        $payment->load('user:id,name,email');
+        return response()->json($payment);
+    }
+
+    /**
      * POST /api/payment/create-order
      */
     public function createOrder(Request $request)

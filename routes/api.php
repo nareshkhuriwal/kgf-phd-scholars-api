@@ -139,6 +139,15 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::delete('/chapters/{chapter}/items/{item}', [ChapterController::class, 'removeItem']);
     Route::get('/reports/chapters', [ChapterController::class, 'chapterOptions']);
 
+
+    // Users - list + show
+    Route::get('/monitoring/users', [UserController::class, 'index']);
+    Route::get('/monitoring/users/{user}', [UserController::class, 'show']);
+
+    Route::get('/monitoring/payments', [PaymentController::class, 'index']);
+    Route::get('/monitoring/payments/{payment}', [PaymentController::class, 'show']);
+
+
     // ROL exports
     Route::get('/reports/rol.xlsx', [ROLController::class, 'exportXlsx']);
     Route::get('/reports/rol.docx', [ROLController::class, 'exportDocx']);
