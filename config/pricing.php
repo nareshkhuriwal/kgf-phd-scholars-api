@@ -22,7 +22,7 @@ return [
             'upgrade' => [
                 'key'     => 'researcher-upgrade',
                 'title'   => 'Researcher Pro',
-                'price'   => '₹149',
+                'price'   => '₹249',
                 'subtitle'=> 'Unlock higher limits for serious work.',
                 'bullets' => [
                     'Up to 200 papers',
@@ -55,7 +55,7 @@ return [
             'upgrade' => [
                 'key'     => 'supervisor-upgrade',
                 'title'   => 'Supervisor Pro',
-                'price'   => '₹249',
+                'price'   => '₹499',
                 'subtitle'=> 'Scale supervision across more researchers.',
                 'bullets' => [
                     'Up to 6 researchers for review',
@@ -76,7 +76,7 @@ return [
             'current' => [
                 'key'     => 'admin-current',
                 'title'   => 'Admin',
-                'price'   => '₹1999',
+                'price'   => '₹14999',
                 'subtitle'=> 'Central admin access for your university.',
                 'bullets' => [
                     'Paid plan — 30-days free tier for Admin',
