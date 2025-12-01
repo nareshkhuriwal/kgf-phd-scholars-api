@@ -21,10 +21,10 @@ return [
         ],
 
         //
-        // Researcher Pro - MONTHLY (minimum recommended: ₹299/month)
+        // Researcher Pro - MONTHLY (minimum recommended: ₹249/month)
         //
         'researcher-pro' => [
-            'amount' => 29900,           // ₹299.00 (in paise)
+            'amount' => 24900,           // ₹249.00 (in paise)
             'label'  => 'Researcher Pro (Monthly)',
             'duration_days' => 30,
             'max_papers'      => 200,
@@ -35,10 +35,10 @@ return [
         ],
 
         //
-        // Researcher Pro - YEARLY (minimum recommended: ₹2,999/year)
+        // Researcher Pro - YEARLY (minimum recommended: ₹2,899/year)
         //
         'researcher-pro-yearly' => [
-            'amount' => 299900,         // ₹2,999.00 (in paise)
+            'amount' => 289900,         // ₹2,899.00 (in paise)
             'label'  => 'Researcher Pro (Yearly)',
             'duration_days' => 365,
             'max_papers'      => 200,
@@ -61,10 +61,10 @@ return [
         ],
 
         //
-        // Supervisor Pro - MONTHLY (minimum recommended: ₹999/month)
+        // Supervisor Pro - MONTHLY (minimum recommended: ₹499/month)
         //
         'supervisor-pro' => [
-            'amount' => 99900,           // ₹999.00 (in paise)
+            'amount' => 49900,           // ₹499.00 (in paise)
             'label'  => 'Supervisor Pro (Monthly)',
             'duration_days' => 30,
             // Supervisor is intended to manage multiple researchers:
@@ -76,10 +76,10 @@ return [
         ],
 
         //
-        // Supervisor Pro - YEARLY (minimum recommended: ₹9,999/year)
+        // Supervisor Pro - YEARLY (minimum recommended: ₹4,999/year)
         //
         'supervisor-pro-yearly' => [
-            'amount' => 999900,         // ₹9,999.00 (in paise)
+            'amount' => 499900,         // ₹4,999.00 (in paise)
             'label'  => 'Supervisor Pro (Yearly)',
             'duration_days' => 365,
             'max_papers'      => 1000,
@@ -105,7 +105,7 @@ return [
         // Admin Pro (Institutional) - ANNUAL (minimum recommended: ₹99,000/year per dept)
         //
         'admin-pro' => [
-            'amount' => 9900000,        // ₹99,000.00 (in paise)
+            'amount' => 1499900,        // ₹14,999.00 (in paise)
             'label'  => 'Admin Pro (Yearly)',
             'duration_days' => 365,
             'max_papers'      => null,   // null => unlimited
