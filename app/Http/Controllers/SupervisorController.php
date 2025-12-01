@@ -10,10 +10,8 @@ use App\Models\User;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Mail;
 
-
 class SupervisorController extends Controller
 {
-
     protected function assertAdmin(Request $request): void
     {
         if ($request->user()?->role !== 'admin') {
@@ -22,7 +20,20 @@ class SupervisorController extends Controller
     }
 
     /**
+     * Helper: ensure the current admin is the creator of the supervisor
+     */
+    protected function assertOwner(Request $request, User $supervisor): void
+    {
+        $currentId = $request->user()?->id;
+        // If supervisor doesn't have created_by or not created by current admin, forbid
+        if ($supervisor->created_by !== $currentId) {
+            abort(403, 'You are not allowed to access this supervisor.');
+        }
+    }
+
+    /**
      * GET /api/supervisors
+     * Only returns supervisors created by the current admin.
      * Optional query params: q, perPage
      */
     public function index(Request $request)
@@ -35,7 +46,8 @@ class SupervisorController extends Controller
         $q = trim((string) $request->input('q', ''));
 
         $query = User::query()
-            ->where('role', 'supervisor');
+            ->where('role', 'supervisor')
+            ->where('created_by', $request->user()->id); // <- only supervisors created by current admin
 
         if ($q !== '') {
             $query->where(function ($sub) use ($q) {
@@ -62,6 +74,9 @@ class SupervisorController extends Controller
 
         $data = $request->validated();
         $data['role'] = 'supervisor';
+
+        // Ensure created_by is set to current admin
+        $data['created_by'] = $request->user()->id;
 
         // 1️⃣ Generate a secure random password
         $plainPassword = str()->random(12); // you can tweak length/rules
@@ -92,6 +107,9 @@ class SupervisorController extends Controller
             abort(404);
         }
 
+        // Ensure current admin created this supervisor
+        $this->assertOwner($request, $supervisor);
+
         return new SupervisorResource($supervisor);
     }
 
@@ -105,6 +123,9 @@ class SupervisorController extends Controller
         if ($supervisor->role !== 'supervisor') {
             abort(404);
         }
+
+        // Ensure current admin created this supervisor
+        $this->assertOwner($request, $supervisor);
 
         $data = $request->validated();
         $data['role'] = 'supervisor'; // enforce
@@ -127,6 +148,9 @@ class SupervisorController extends Controller
         if ($supervisor->role !== 'supervisor') {
             abort(404);
         }
+
+        // Ensure current admin created this supervisor
+        $this->assertOwner($request, $supervisor);
 
         $supervisor->delete();
 
