@@ -9,6 +9,7 @@ use App\Models\Paper;
 use Illuminate\Http\Request;
 use App\Http\Resources\ChapterOptionResource;
 use App\Http\Controllers\Concerns\OwnerAuthorizes;
+use Illuminate\Support\Facades\DB;
 
 class ChapterController extends Controller
 {
@@ -93,5 +94,41 @@ class ChapterController extends Controller
         $item->delete();
         return ['ok'=>true];
     }
+
+
+    public function reorder(Request $request)
+    {
+        $userId = $request->user()->id;
+
+        $data = $request->validate([
+            'items' => ['required', 'array', 'min:1'],
+            'items.*.id' => ['required', 'integer', 'exists:chapters,id'],
+            'items.*.order_index' => ['required', 'integer', 'min:0'],
+        ]);
+
+        // Fetch only chapters owned by the user
+        $chapters = Chapter::where('user_id', $userId)
+            ->whereIn('id', collect($data['items'])->pluck('id'))
+            ->get()
+            ->keyBy('id');
+
+        if ($chapters->count() !== count($data['items'])) {
+            abort(403, 'One or more chapters do not belong to the user.');
+        }
+        DB::transaction(function () use ($data, $chapters) {
+            foreach ($data['items'] as $row) {
+                $chapters[$row['id']]->update([
+                    'order_index' => $row['order_index'],
+                ]);
+            }
+        });
+
+        return response()->json([
+            'ok' => true,
+            'message' => 'Chapter order updated successfully',
+        ]);
+    }
+
+
 
 }

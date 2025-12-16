@@ -145,6 +145,9 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::delete('/chapters/{chapter}', [ChapterController::class, 'destroy']);
     Route::post('/chapters/{chapter}/items', [ChapterController::class, 'addItem']);
     Route::delete('/chapters/{chapter}/items/{item}', [ChapterController::class, 'removeItem']);
+    Route::post('/chapters/reorder', [ChapterController::class, 'reorder']);
+
+
     Route::get('/reports/chapters', [ChapterController::class, 'chapterOptions']);
 
 
