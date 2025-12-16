@@ -17,90 +17,140 @@ class PdfHighlightController extends Controller
     use OwnerAuthorizes;
     use ResolvesPublicUploads;
 
-public function store(Request $request)
-{
-    $request->validate([
-        'file'       => 'required|file|mimetypes:application/pdf|max:51200', // 50MB
-        'dest_url'   => 'nullable|string',
-        'dest_path'  => 'nullable|string',
-        'overwrite'  => 'nullable|boolean',
-        'keep_name'  => 'nullable|boolean',
-        'label'      => 'nullable|string|max:100',
-    ]);
 
-    $file        = $request->file('file');
-    $defaultDisk = 'uploads'; // <<< force uploads
-    $overwrite   = $request->boolean('overwrite', ($request->filled('dest_url') || $request->filled('dest_path')));
+    /**
+     * Clamp a numeric value into the [0,1] range.
+     * Returns null if value is not numeric.
+     */
+    private function clamp01($v): ?float
+    {
+        if (!is_numeric($v)) {
+            return null;
+        }
 
-    // --- Resolve destination (URL or path) ---
-    [$disk, $rel] = [null, null];
+        $f = (float) $v;
 
-    if ($request->filled('dest_url')) {
-        [$disk, $rel] = $this->resolveFromUrl($request->string('dest_url'));
-    } elseif ($request->filled('dest_path')) {
-        [$disk, $rel] = $this->resolveFromPath($request->string('dest_path'));
+        if ($f < 0.0) return 0.0;
+        if ($f > 1.0) return 1.0;
+
+        return $f;
     }
 
-    // Coerce to uploads if resolver didn't return a disk but we have a path
-    if ($rel && !$disk) $disk = $defaultDisk;
+    private function brushStrokeToRect(array $stroke): ?array
+    {
+        $minX = INF;
+        $minY = INF;
+        $maxX = -INF;
+        $maxY = -INF;
 
-    // --- Overwrite exact destination if provided ---
-    if ($disk && $rel) {
-        if (!$this->isSafeRelative($rel)) {
-            return response()->json(['message' => 'Invalid destination path'], 422);
+        foreach (($stroke['points'] ?? []) as $p) {
+            if (!isset($p['x'], $p['y'])) continue;
+
+            $x = $this->clamp01($p['x']);
+            $y = $this->clamp01($p['y']);
+            if ($x === null || $y === null) continue;
+
+            $minX = min($minX, $x);
+            $minY = min($minY, $y);
+            $maxX = max($maxX, $x);
+            $maxY = max($maxY, $y);
         }
 
-        $dir  = trim(dirname($rel), '/');
-        $name = basename($rel);
+        if (!is_finite($minX) || !is_finite($minY)) return null;
 
-        Storage::disk($disk)->makeDirectory($dir);
+        return [
+            'x' => $minX,
+            'y' => $minY,
+            'w' => max(0.0001, $maxX - $minX),
+            'h' => max(0.0001, $maxY - $minY),
+        ];
+    }
 
-        // atomic temp write then move
-        $tmpName = $name.'.tmp-'.Str::random(6).'.pdf';
-        $tmpRel  = ($dir ? "$dir/" : '').$tmpName;
 
-        Storage::disk($disk)->putFileAs($dir, $file, $tmpName);
+    public function store(Request $request)
+    {
+        $request->validate([
+            'file'       => 'required|file|mimetypes:application/pdf|max:51200', // 50MB
+            'dest_url'   => 'nullable|string',
+            'dest_path'  => 'nullable|string',
+            'overwrite'  => 'nullable|boolean',
+            'keep_name'  => 'nullable|boolean',
+            'label'      => 'nullable|string|max:100',
+        ]);
 
-        if ($overwrite && Storage::disk($disk)->exists($rel)) {
-            Storage::disk($disk)->delete($rel);
+        $file        = $request->file('file');
+        $defaultDisk = 'uploads'; // <<< force uploads
+        $overwrite   = $request->boolean('overwrite', ($request->filled('dest_url') || $request->filled('dest_path')));
+
+        // --- Resolve destination (URL or path) ---
+        [$disk, $rel] = [null, null];
+
+        if ($request->filled('dest_url')) {
+            [$disk, $rel] = $this->resolveFromUrl($request->string('dest_url'));
+        } elseif ($request->filled('dest_path')) {
+            [$disk, $rel] = $this->resolveFromPath($request->string('dest_path'));
         }
-        Storage::disk($disk)->move($tmpRel, $rel);
+
+        // Coerce to uploads if resolver didn't return a disk but we have a path
+        if ($rel && !$disk) $disk = $defaultDisk;
+
+        // --- Overwrite exact destination if provided ---
+        if ($disk && $rel) {
+            if (!$this->isSafeRelative($rel)) {
+                return response()->json(['message' => 'Invalid destination path'], 422);
+            }
+
+            $dir  = trim(dirname($rel), '/');
+            $name = basename($rel);
+
+            Storage::disk($disk)->makeDirectory($dir);
+
+            // atomic temp write then move
+            $tmpName = $name . '.tmp-' . Str::random(6) . '.pdf';
+            $tmpRel  = ($dir ? "$dir/" : '') . $tmpName;
+
+            Storage::disk($disk)->putFileAs($dir, $file, $tmpName);
+
+            if ($overwrite && Storage::disk($disk)->exists($rel)) {
+                Storage::disk($disk)->delete($rel);
+            }
+            Storage::disk($disk)->move($tmpRel, $rel);
+
+            return response()->json([
+                'message'     => 'Uploaded (overwritten)',
+                'disk'        => $disk,                 // 'uploads'
+                'path'        => $rel,                  // e.g. library/2025/11/abc.pdf
+                'url'         => Storage::disk($disk)->url($rel), // /uploads/library/...
+                'overwritten' => true,
+            ], 201);
+        }
+
+        // --- No explicit destination: save under uploads by default ---
+        $activeDisk = $defaultDisk; // always 'uploads'
+        $baseRel    = 'library/' . date('Y') . '/' . date('m');
+        Storage::disk($activeDisk)->makeDirectory($baseRel);
+
+        if ($request->boolean('keep_name') && $file->getClientOriginalName()) {
+            $safe = pathinfo($file->getClientOriginalName(), PATHINFO_FILENAME);
+            $safe = Str::slug($safe, '_') ?: 'file';
+            $rel  = "{$baseRel}/{$safe}.pdf";
+            if (Storage::disk($activeDisk)->exists($rel)) {
+                $rel = "{$baseRel}/{$safe}_" . Str::random(4) . ".pdf";
+            }
+            Storage::disk($activeDisk)->putFileAs($baseRel, $file, basename($rel));
+            $storedRel = $rel;
+        } else {
+            $storedRel = $file->store($baseRel, $activeDisk);
+        }
 
         return response()->json([
-            'message'     => 'Uploaded (overwritten)',
-            'disk'        => $disk,                 // 'uploads'
-            'path'        => $rel,                  // e.g. library/2025/11/abc.pdf
-            'url'         => Storage::disk($disk)->url($rel), // /uploads/library/...
-            'overwritten' => true,
+            'message'     => 'Uploaded',
+            'disk'        => $activeDisk,                               // 'uploads'
+            'path'        => $storedRel,                                // library/2025/11/xxx.pdf
+            'url'         => Storage::disk($activeDisk)->url($storedRel), // https://.../uploads/...
+            'overwritten' => false,
         ], 201);
     }
-
-    // --- No explicit destination: save under uploads by default ---
-    $activeDisk = $defaultDisk; // always 'uploads'
-    $baseRel    = 'library/'.date('Y').'/'.date('m');
-    Storage::disk($activeDisk)->makeDirectory($baseRel);
-
-    if ($request->boolean('keep_name') && $file->getClientOriginalName()) {
-        $safe = pathinfo($file->getClientOriginalName(), PATHINFO_FILENAME);
-        $safe = Str::slug($safe, '_') ?: 'file';
-        $rel  = "{$baseRel}/{$safe}.pdf";
-        if (Storage::disk($activeDisk)->exists($rel)) {
-            $rel = "{$baseRel}/{$safe}_".Str::random(4).".pdf";
-        }
-        Storage::disk($activeDisk)->putFileAs($baseRel, $file, basename($rel));
-        $storedRel = $rel;
-    } else {
-        $storedRel = $file->store($baseRel, $activeDisk);
-    }
-
-    return response()->json([
-        'message'     => 'Uploaded',
-        'disk'        => $activeDisk,                               // 'uploads'
-        'path'        => $storedRel,                                // library/2025/11/xxx.pdf
-        'url'         => Storage::disk($activeDisk)->url($storedRel), // https://.../uploads/...
-        'overwritten' => false,
-    ], 201);
-}
 
 
     /**
@@ -121,7 +171,8 @@ public function store(Request $request)
             'replace' => 'nullable|boolean', // if you want to replace the "current" pdf
         ]);
 
-        $y = date('Y'); $m = date('m');
+        $y = date('Y');
+        $m = date('m');
         $rel = "uploads/papers/{$paper->id}/highlighted/{$y}/{$m}";
         $path = $request->file('file')->store($rel, 'public');
 
@@ -147,7 +198,7 @@ public function store(Request $request)
         return response()->json([
             'message' => 'Uploaded',
             'path'    => $path,
-            'url'     => asset('storage/'.$path),
+            'url'     => asset('storage/' . $path),
         ], 201);
     }
 
@@ -196,6 +247,27 @@ public function store(Request $request)
                 $cleanByPage[$page] = array_merge($cleanByPage[$page] ?? [], $cleanRects);
             }
         }
+
+        $brushHighlights = collect($request->input('brushHighlights', []));
+
+        foreach ($brushHighlights as $b) {
+            $page = (int) ($b['page'] ?? 0);
+            if ($page <= 0) continue;
+
+            foreach (($b['strokes'] ?? []) as $stroke) {
+                $rect = $this->brushStrokeToRect($stroke);
+                if (!$rect) continue;
+
+                $cleanByPage[$page][] = [
+                    'x' => $rect['x'],
+                    'y' => $rect['y'],
+                    'w' => $rect['w'],
+                    'h' => $rect['h'],
+                ];
+            }
+        }
+
+
 
         if (!$cleanByPage) {
             return response()->json(['message' => 'No valid highlights'], 422);
@@ -268,10 +340,10 @@ public function store(Request $request)
         }
         $rawUrl = Storage::disk($srcDisk)->url($finalRel);
         $ver    = now()->timestamp; // or Str::uuid()->toString()
-        
+
         return response()->json([
             'message'   => 'Highlights applied',
-            'file_url'  => $rawUrl , // . '?v=' . $ver versioned URL for immediate refresh
+            'file_url'  => $rawUrl, // . '?v=' . $ver versioned URL for immediate refresh
             'raw_url'   => $rawUrl,                // keep original in case you need it
             'replaced'  => $replace,
         ]);
