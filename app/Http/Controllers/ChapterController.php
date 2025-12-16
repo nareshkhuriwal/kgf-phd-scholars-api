@@ -126,9 +126,11 @@ class ChapterController extends Controller
         return response()->json([
             'ok' => true,
             'message' => 'Chapter order updated successfully',
+            'items' => Chapter::where('user_id', $userId)
+                ->orderBy('order_index')
+                ->get(['id', 'title', 'order_index', 'updated_at']),
         ]);
+
     }
-
-
 
 }
