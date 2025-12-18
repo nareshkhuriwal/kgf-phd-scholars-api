@@ -174,6 +174,8 @@ Route::middleware('auth:sanctum')->group(function () {
 
     // NEW: per-tab save
     Route::put('/reviews/{paper}/sections', [ReviewController::class, 'updateSection']);
+    Route::get('/reviews/{paper}/sections', [ReviewController::class, 'sections']);
+
     Route::put('/reviews/{paper}/status', [ReviewController::class, 'updateStatus']); // NEW
 
         // Lists used by the UI

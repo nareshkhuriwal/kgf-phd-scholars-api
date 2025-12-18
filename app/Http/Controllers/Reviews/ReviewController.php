@@ -151,4 +151,28 @@ class ReviewController extends Controller
 
         return new ReviewResource($review);
     }
+
+    /**
+     * READ sections only
+     * GET /reviews/{paper}/sections
+     */
+    public function sections(Request $request, Paper $paper)
+    {
+        $request->user() ?? abort(401, 'Unauthenticated');
+        $this->authorizeOwner($paper, 'created_by');
+
+        $review = Review::firstOrCreate(
+            ['paper_id' => $paper->id, 'user_id' => $request->user()->id],
+            [
+                'status'          => Review::STATUS_DRAFT,
+                'review_sections' => [],
+            ]
+        );
+
+        return response()->json([
+            'review_sections' => $review->review_sections ?? [],
+            'status'          => $review->status,
+        ]);
+    }
+
 }
