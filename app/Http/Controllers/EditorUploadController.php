@@ -4,7 +4,6 @@ namespace App\Http\Controllers;
 
 use Illuminate\Http\Request;
 use Illuminate\Http\JsonResponse;
-use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
 use Illuminate\Validation\ValidationException;
@@ -12,20 +11,20 @@ use Illuminate\Validation\ValidationException;
 class EditorUploadController extends Controller
 {
     /**
-     * Handle CKEditor image upload (JWT authenticated).
+     * Handle CKEditor image upload (Sanctum authenticated).
      *
-     * Route MUST use auth:api middleware
+     * Route MUST use `auth:sanctum` middleware
      */
     public function store(Request $request): JsonResponse
     {
         /**
-         * 🔐 JWT authentication (explicit, predictable)
+         * 🔐 Sanctum authentication (CORRECT)
          */
-        $user = Auth::guard('api')->user();
+        $user = $request->user();
 
         if (!$user) {
             return response()->json([
-                'message' => 'Unauthenticated',
+                'message' => 'Unauthenticated.',
             ], 401);
         }
 
@@ -41,7 +40,7 @@ class EditorUploadController extends Controller
         $paperId = $validated['paper_id'] ?? 'na';
 
         /**
-         * 🔍 Extra MIME safety (defense-in-depth)
+         * 🔍 Extra MIME safety
          */
         $mime = $file->getMimeType();
         if (!in_array($mime, ['image/jpeg', 'image/png', 'image/webp'], true)) {
@@ -51,8 +50,7 @@ class EditorUploadController extends Controller
         }
 
         /**
-         * 🧾 Generate deterministic filename
-         * u<user>_p<paper>_<timestamp>_<rand>.ext
+         * 🧾 Deterministic filename
          */
         $ext = strtolower($file->getClientOriginalExtension() ?: 'jpg');
 
@@ -67,13 +65,8 @@ class EditorUploadController extends Controller
 
         /**
          * 💾 Store file
-         * uploads disk must be public + symlinked
          */
-        $path = $file->storeAs(
-            'editor',
-            $fileName,
-            'uploads'
-        );
+        $path = $file->storeAs('editor', $fileName, 'uploads');
 
         /**
          * 🌍 Public URL
@@ -81,7 +74,7 @@ class EditorUploadController extends Controller
         $url = Storage::disk('uploads')->url($path);
 
         /**
-         * ✅ CKEditor REQUIRED RESPONSE FORMAT
+         * ✅ CKEditor REQUIRED response
          */
         return response()->json([
             'uploaded' => true,
