@@ -37,11 +37,6 @@ Route::post('/auth/verify-register-otp', [AuthController::class, 'verifyRegister
 Route::post('forgot-password/otp', [AuthController::class, 'sendPasswordOtp']);
 Route::post('reset-password/otp', [AuthController::class, 'resetPasswordWithOtp']);
 
-Route::post(
-    '/editor/upload-image',
-    [EditorUploadController::class, 'storeJwt']
-)->middleware('auth:api'); // or jwt.auth depending on setup
-
 
 // Route::middleware(['auth:sanctum','role:super_admin'])->get('/monitoring/analytics', [MonitoringController::class, 'analytics']);
 
@@ -58,6 +53,9 @@ Route::middleware('auth:sanctum')->group(function () {
     // avatar upload / delete
     Route::post('/profile/avatar', [ProfileController::class, 'avatar']);
     Route::delete('/profile/avatar', [ProfileController::class, 'removeAvatar']);
+
+    Route::post('/editor/upload-image', [EditorUploadController::class, 'store']);
+
 
     // Full list for tables
     Route::get('/users', [UserController::class, 'index']);
