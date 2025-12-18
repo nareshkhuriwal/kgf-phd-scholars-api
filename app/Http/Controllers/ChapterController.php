@@ -98,7 +98,7 @@ class ChapterController extends Controller
      */
     public function update(ChapterRequest $request, Chapter $chapter): JsonResponse
     {
-        $this->authorizeOwner($chapter);
+        // $this->authorizeOwner($chapter);
 
         $data = $request->validated();
         $data['updated_by'] = $request->user()->id;
