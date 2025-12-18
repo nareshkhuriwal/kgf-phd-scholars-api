@@ -3,134 +3,231 @@
 namespace App\Http\Controllers;
 
 use App\Http\Requests\ChapterRequest;
+use App\Http\Resources\ChapterOptionResource;
 use App\Models\Chapter;
 use App\Models\ChapterItem;
 use App\Models\Paper;
+use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
-use App\Http\Resources\ChapterOptionResource;
-use App\Http\Controllers\Concerns\OwnerAuthorizes;
 use Illuminate\Support\Facades\DB;
+use App\Http\Controllers\Concerns\OwnerAuthorizes;
 
 class ChapterController extends Controller
 {
     use OwnerAuthorizes;
 
-    public function index(Request $req) {
-        $q = Chapter::query()->where('user_id',$req->user()->id)->withCount('items');
-        if ($cid = $req->get('collection_id')) $q->where('collection_id',$cid);
-        return $q->orderBy('order_index')->paginate($req->integer('per_page',25));
-    }
-
-    public function chapterOptions(Request $req)
+    /**
+     * List chapters owned by the current user.
+     */
+    public function index(Request $request): JsonResponse
     {
-        $q = Chapter::query();
+        $userId = $request->user()->id;
 
-        if ($s = $req->get('search')) {
-            $q->where('title', 'like', "%{$s}%");
+        $query = Chapter::query()
+            ->where('user_id', $userId)
+            ->withCount('items')
+            ->orderBy('order_index');
+
+        if ($collectionId = $request->integer('collection_id')) {
+            $query->where('collection_id', $collectionId);
         }
 
-        $per = $req->get('per_page', 100);
-        if ($per === 'all') {
-            return ChapterOptionResource::collection($q->orderBy('title')->get());
+        $perPage = $request->integer('per_page', 25);
+
+        return response()->json(
+            $query->paginate($perPage)
+        );
+    }
+
+    /**
+     * Lightweight chapter list for dropdowns / selectors.
+     */
+    public function chapterOptions(Request $request)
+    {
+        $query = Chapter::query()
+            ->where('user_id', $request->user()->id);
+
+        if ($search = trim((string) $request->get('search'))) {
+            $query->where('title', 'like', "%{$search}%");
         }
 
-        $chapters = $q->orderBy('title')->paginate((int)$per);
-        return ChapterOptionResource::collection($chapters);
+        $perPage = $request->get('per_page', 100);
+
+        if ($perPage === 'all') {
+            return ChapterOptionResource::collection(
+                $query->orderBy('title')->get()
+            );
+        }
+
+        return ChapterOptionResource::collection(
+            $query->orderBy('title')->paginate((int) $perPage)
+        );
     }
 
+    /**
+     * Create a new chapter.
+     */
+    public function store(ChapterRequest $request): JsonResponse
+    {
+        $userId = $request->user()->id;
 
-    public function store(ChapterRequest $req) {
-        $data = $req->validated();
-        $data['user_id'] = $req->user()->id;
-        $ch = Chapter::create($data);
-        return response()->json($ch, 201);
+        $data = $request->validated();
+        $data['user_id']    = $userId;
+        $data['created_by'] = $userId;
+        $data['updated_by'] = $userId;
+
+        $chapter = Chapter::create($data);
+
+        return response()->json($chapter, 201);
     }
 
-    public function show(Chapter $chapter) {
+    /**
+     * Show a single chapter with its items.
+     */
+    public function show(Chapter $chapter): JsonResponse
+    {
         $this->authorizeOwner($chapter);
-        return $chapter->load('items.paper:id,title,authors,year,doi,paper_code');
+
+        return response()->json(
+            $chapter->load('items.paper:id,title,authors,year,doi,paper_code,created_at,updated_at')
+        );
     }
 
-    public function update(ChapterRequest $req, Chapter $chapter) {
+    /**
+     * Update chapter metadata or body.
+     */
+    public function update(ChapterRequest $request, Chapter $chapter): JsonResponse
+    {
         $this->authorizeOwner($chapter);
-        $chapter->update($req->validated());
-        return $chapter->fresh();
+
+        $data = $request->validated();
+        $data['updated_by'] = $request->user()->id;
+
+        $chapter->update($data);
+
+        return response()->json($chapter->fresh());
     }
 
-    public function destroy(Chapter $chapter) {
+    /**
+     * Delete a chapter and its items.
+     */
+    public function destroy(Chapter $chapter): JsonResponse
+    {
         $this->authorizeOwner($chapter);
-        $chapter->delete();
-        return ['ok'=>true];
+
+        DB::transaction(function () use ($chapter) {
+            $chapter->items()->delete();
+            $chapter->delete();
+        });
+
+        return response()->json(['ok' => true]);
     }
 
-    public function addItem(Request $req, Chapter $chapter) {
+    /**
+     * Add a paper item to a chapter.
+     */
+    public function addItem(Request $request, Chapter $chapter): JsonResponse
+    {
         $this->authorizeOwner($chapter);
-        $data = $req->validate([
-            'paper_id' => ['required','exists:papers,id'],
-            'source_field' => ['required','in:review_html,key_issue,solution_method_html,related_work_html,input_params_html,hw_sw_html,results_html,advantages_html,limitations_html,remarks_html'],
-            'order_index' => ['nullable','integer'],
-            'citation_style' => ['nullable','string','max:32'],
+
+        $data = $request->validate([
+            'paper_id'       => ['required', 'exists:papers,id'],
+            'source_field'   => ['required', 'in:review_html,key_issue,solution_method_html,related_work_html,input_params_html,hw_sw_html,results_html,advantages_html,limitations_html,remarks_html'],
+            'order_index'    => ['nullable', 'integer', 'min:0'],
+            'citation_style' => ['nullable', 'string', 'max:32'],
         ]);
 
-        $paper = Paper::findOrFail($data['paper_id']);
+        $paper = Paper::select(
+            'id',
+            'review_html',
+            'key_issue',
+            'solution_method_html',
+            'related_work_html',
+            'input_params_html',
+            'hw_sw_html',
+            'results_html',
+            'advantages_html',
+            'limitations_html',
+            'remarks_html'
+        )->findOrFail($data['paper_id']);
+
         $field = $data['source_field'];
-        $content = $field === 'key_issue' ? ($paper->key_issue ?? '') : ($paper->$field ?? '');
+
+        $content = $field === 'key_issue'
+            ? ($paper->key_issue ?? '')
+            : ($paper->{$field} ?? '');
 
         $item = ChapterItem::create([
-            'chapter_id' => $chapter->id,
-            'paper_id' => $paper->id,
-            'source_field' => $field,
-            'content_html' => $content ?? '',
-            'citation_style' => $data['citation_style'] ?? null,
-            'order_index' => $data['order_index'] ?? 0,
+            'chapter_id'    => $chapter->id,
+            'paper_id'      => $paper->id,
+            'source_field'  => $field,
+            'content_html'  => $content,
+            'citation_style'=> $data['citation_style'] ?? null,
+            'order_index'   => $data['order_index'] ?? 0,
+            'created_by'    => $request->user()->id,
+            'updated_by'    => $request->user()->id,
         ]);
 
-        return response()->json($item->load('paper:id,title,authors,year,doi,paper_code'), 201);
+        return response()->json(
+            $item->load('paper:id,title,authors,year,doi,paper_code'),
+            201
+        );
     }
 
-    public function removeItem(Chapter $chapter, ChapterItem $item) {
+    /**
+     * Remove an item from a chapter.
+     */
+    public function removeItem(Chapter $chapter, ChapterItem $item): JsonResponse
+    {
         $this->authorizeOwner($chapter);
-        if ($item->chapter_id !== $chapter->id) abort(404);
+
+        if ($item->chapter_id !== $chapter->id) {
+            abort(404);
+        }
+
         $item->delete();
-        return ['ok'=>true];
+
+        return response()->json(['ok' => true]);
     }
 
-
-    public function reorder(Request $request)
+    /**
+     * Reorder chapters in bulk.
+     */
+    public function reorder(Request $request): JsonResponse
     {
         $userId = $request->user()->id;
 
         $data = $request->validate([
-            'items' => ['required', 'array', 'min:1'],
-            'items.*.id' => ['required', 'integer', 'exists:chapters,id'],
+            'items'               => ['required', 'array', 'min:1'],
+            'items.*.id'          => ['required', 'integer', 'exists:chapters,id'],
             'items.*.order_index' => ['required', 'integer', 'min:0'],
         ]);
 
-        // Fetch only chapters owned by the user
+        $ids = collect($data['items'])->pluck('id');
+
         $chapters = Chapter::where('user_id', $userId)
-            ->whereIn('id', collect($data['items'])->pluck('id'))
+            ->whereIn('id', $ids)
             ->get()
             ->keyBy('id');
 
-        if ($chapters->count() !== count($data['items'])) {
+        if ($chapters->count() !== $ids->count()) {
             abort(403, 'One or more chapters do not belong to the user.');
         }
-        DB::transaction(function () use ($data, $chapters) {
+
+        DB::transaction(function () use ($data, $chapters, $userId) {
             foreach ($data['items'] as $row) {
                 $chapters[$row['id']]->update([
                     'order_index' => $row['order_index'],
+                    'updated_by'  => $userId,
                 ]);
             }
         });
 
         return response()->json([
-            'ok' => true,
-            'message' => 'Chapter order updated successfully',
+            'ok'    => true,
             'items' => Chapter::where('user_id', $userId)
                 ->orderBy('order_index')
-                ->get(['id', 'title', 'order_index', 'updated_at']),
+                ->get(['id', 'title', 'order_index', 'updated_at', 'created_at']),
         ]);
-
     }
-
 }
