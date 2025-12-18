@@ -36,7 +36,7 @@ class ReviewController extends Controller
                 'Key Issue'         => $review->key_issue,
                 'Remarks'           => $review->remarks,
             ];
-            $review->review_sections = array_filter($map, fn ($v) => filled($v));
+            $review->review_sections = array_filter($map, fn($v) => filled($v));
             $review->save();
         }
 
@@ -64,26 +64,33 @@ class ReviewController extends Controller
             ]
         );
 
-        // We deliberately ignore any incoming 'status' here; status is driven by workflow.
-        $data = $request->only(['html', 'key_issue', 'remarks', 'review_sections']);
+        // ---- Decode main HTML (CRITICAL) ----
+        if ($request->filled('html')) {
+            $decodedHtml = base64_decode($request->input('html'), true);
 
-        // Update structured sections (JSON)
+            if ($decodedHtml === false) {
+                abort(422, 'Invalid HTML encoding');
+            }
+
+            $review->html = $decodedHtml;
+        }
+
+        // ---- Structured sections (already decoded client-side or separate flow) ----
         if ($request->has('review_sections')) {
-            $incoming = $data['review_sections'];
+            $incoming = $request->input('review_sections');
             if (is_array($incoming)) {
-                // Replace complete sections by design
                 $review->review_sections = $incoming;
             }
         }
 
-        // Keep legacy fields for exports/back-compat
-        foreach (['html', 'key_issue', 'remarks'] as $k) {
-            if ($request->filled($k)) {
-                $review->{$k} = $data[$k];
+        // ---- Legacy fields (DO NOT touch html again) ----
+        foreach (['key_issue', 'remarks'] as $field) {
+            if ($request->filled($field)) {
+                $review->{$field} = $request->input($field);
             }
         }
 
-        // Any full save moves to in_progress (unless archived)
+        // ---- Status transition ----
         if ($review->status !== Review::STATUS_ARCHIVED) {
             $review->status = Review::STATUS_IN_PROGRESS;
         }
@@ -93,6 +100,7 @@ class ReviewController extends Controller
 
         return new ReviewResource($review);
     }
+
 
     /**
      * PARTIAL update — update just one tab/section
@@ -112,21 +120,27 @@ class ReviewController extends Controller
             ]
         );
 
+        // ✅ DECODE HTML (CRITICAL)
+        $decodedHtml = base64_decode($request->input('html'), true);
+
+        if ($decodedHtml === false) {
+            abort(422, 'Invalid HTML encoding');
+        }
+
         $sections = $review->review_sections ?? [];
-        $sections[$request->input('section_key')] = $request->input('html') ?? '';
+        $sections[$request->input('section_key')] = $decodedHtml;
         $review->review_sections = $sections;
 
-        // Any section save moves to in_progress (unless archived)
         if ($review->status !== Review::STATUS_ARCHIVED) {
             $review->status = Review::STATUS_IN_PROGRESS;
         }
 
-        // Do not touch $review->html here (full concat stays in full update)
         $review->save();
         $review->load(['paper.files']);
 
         return new ReviewResource($review);
     }
+
 
     /**
      * Status toggle — explicit change (MARK COMPLETE, Archive, etc.)
@@ -174,5 +188,4 @@ class ReviewController extends Controller
             'status'          => $review->status,
         ]);
     }
-
 }
