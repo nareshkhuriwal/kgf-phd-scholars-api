@@ -55,6 +55,7 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::delete('/profile/avatar', [ProfileController::class, 'removeAvatar']);
 
     Route::post('/editor/upload-image', [EditorUploadController::class, 'store']);
+    Route::post('/editor/fetch-image', [EditorUploadController::class, 'fetch']);
 
 
     // Full list for tables
