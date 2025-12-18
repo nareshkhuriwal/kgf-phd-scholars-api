@@ -75,6 +75,10 @@ class ChapterController extends Controller
         $data['user_id']    = $userId;
         $data['created_by'] = $userId;
         $data['updated_by'] = $userId;
+        if (isset($data['body_html'])) {
+            $data['body_html'] = base64_decode($data['body_html'], true) ?: '';
+        }
+
 
         $chapter = Chapter::create($data);
 
@@ -96,12 +100,49 @@ class ChapterController extends Controller
     /**
      * Update chapter metadata or body.
      */
+    // public function update(ChapterRequest $request, Chapter $chapter): JsonResponse
+    // {
+    //     // $this->authorizeOwner($chapter);
+
+    //     $data = $request->validated();
+    //     $data['updated_by'] = $request->user()->id;
+
+    //     $chapter->update($data);
+
+    //     return response()->json($chapter->fresh());
+    // }
     public function update(ChapterRequest $request, Chapter $chapter): JsonResponse
     {
-        // $this->authorizeOwner($chapter);
+        $this->authorizeOwner($chapter);
 
         $data = $request->validated();
         $data['updated_by'] = $request->user()->id;
+
+        /*
+        |---------------------------------------------------------
+        | Decode Base64 HTML fields (CRITICAL)
+        |---------------------------------------------------------
+        | These fields are edited via CKEditor and are now sent
+        | Base64-encoded to bypass ModSecurity.
+        */
+        $htmlFields = [
+            'body_html',
+            'introduction_html',
+            'summary_html',
+            'conclusion_html',
+        ];
+
+        foreach ($htmlFields as $field) {
+            if (isset($data[$field]) && is_string($data[$field])) {
+                $decoded = base64_decode($data[$field], true);
+
+                if ($decoded === false) {
+                    abort(422, "Invalid HTML encoding for {$field}");
+                }
+
+                $data[$field] = $decoded;
+            }
+        }
 
         $chapter->update($data);
 
@@ -156,6 +197,7 @@ class ChapterController extends Controller
         $content = $field === 'key_issue'
             ? ($paper->key_issue ?? '')
             : ($paper->{$field} ?? '');
+        $content = base64_decode($content);
 
         $item = ChapterItem::create([
             'chapter_id'    => $chapter->id,
