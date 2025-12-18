@@ -313,7 +313,7 @@ class ReportController extends Controller
         $latestDoneIds = DB::table('reviews')
             ->selectRaw('MAX(id) AS id, paper_id')
             ->where('user_id', $uid)
-            ->where('status', 'done')
+            // ->where('status', 'done')
             ->groupBy('paper_id');
 
         $query = DB::table('papers')
