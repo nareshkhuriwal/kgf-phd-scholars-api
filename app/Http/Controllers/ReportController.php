@@ -18,14 +18,14 @@ class ReportController extends Controller
     /**
      * Quick JSON for ROL page (owner-scoped)
      */
-    public function rol(Request $request)
+    public function rolOld(Request $request)
     {
         $uid = $request->user()->id ?? abort(401, 'Unauthenticated');
 
         $visibleUserIds = $this->visibleUserIdsForCurrent($request);
 
         $rows = Paper::query()
-            ->select(['id','doi','authors','title','year', ...(Schema::hasColumn('papers','category') ? ['category'] : [])])
+            ->select(['id', 'doi', 'authors', 'title', 'year', ...(Schema::hasColumn('papers', 'category') ? ['category'] : [])])
             ->whereIn('created_by', $visibleUserIds)
             ->orderByDesc('created_at')
             ->get()
@@ -36,13 +36,33 @@ class ReportController extends Controller
                     'authors'  => $p->authors,
                     'title'    => $p->title,
                     'year'     => $p->year,
-                    'category' => Schema::hasColumn('papers','category') ? $p->category : null,
+                    'category' => Schema::hasColumn('papers', 'category') ? $p->category : null,
                     'keyIssue' => method_exists($p, 'getAttribute') ? $p->getAttribute('key_issue') : null,
                 ];
             });
 
         return response()->json($rows);
     }
+
+
+    public function rol(Request $request)
+    {
+        $uid = $request->user()->id ?? abort(401);
+
+        [$columns, $rows] = $this->buildRolDataset(
+            uid: $uid,
+            filters: [],
+            selections: [],
+            opts: ['keepHtml' => false]
+        );
+
+        return response()->json([
+            'columns' => $columns,
+            'rows'    => $rows,
+            'total'   => count($rows),
+        ]);
+    }
+
 
     /**
      * Literature list for the page (owner-scoped)
@@ -52,7 +72,7 @@ class ReportController extends Controller
         $uid = $request->user()->id ?? abort(401, 'Unauthenticated');
 
         $rows = Paper::query()
-            ->select(['id','title','authors','year','literature_review'])
+            ->select(['id', 'title', 'authors', 'year', 'literature_review'])
             ->where('created_by', $uid)
             ->whereNotNull('literature_review')
             ->orderByDesc('id')
@@ -60,7 +80,7 @@ class ReportController extends Controller
             ->map(fn($p) => [
                 'id'     => $p->id,
                 'title'  => $p->title,
-                'authors'=> $p->authors,
+                'authors' => $p->authors,
                 'year'   => $p->year,
                 'review' => $p->literature_review,
             ]);
@@ -103,7 +123,7 @@ class ReportController extends Controller
     /**
      * Build ROL dataset (columns + rows) from latest DONE review per paper for this user.
      */
-    protected function buildRolDataset(int $uid, array $filters, array $selections, array $opts = []): array
+    protected function buildRolDatasetOld(int $uid, array $filters, array $selections, array $opts = []): array
     {
         $keepHtml = (bool)($opts['keepHtml'] ?? false);
 
@@ -212,6 +232,155 @@ class ReportController extends Controller
         return [$columns, $rows];
     }
 
+    private function normalizeReviewSections(array $sections, $sectionDefs): array
+    {
+        $normalized = [];
+
+        foreach ($sectionDefs as $sec) {
+            // Try DB key first
+            if (array_key_exists($sec->key, $sections)) {
+                $normalized[$sec->key] = $sections[$sec->key];
+                continue;
+            }
+
+            // Fallback: label-based legacy data
+            if (array_key_exists($sec->label, $sections)) {
+                $normalized[$sec->key] = $sections[$sec->label];
+            }
+        }
+
+        return $normalized;
+    }
+
+
+    protected function buildRolDataset(
+        int $uid,
+        array $filters,
+        array $selections,
+        array $opts = []
+    ): array {
+        $keepHtml = (bool)($opts['keepHtml'] ?? false);
+
+        /* ---------------------------------
+     * 1. Load section definitions (DB)
+     * --------------------------------- */
+        $sectionDefs = \App\Models\ReviewSectionKey::query()
+            ->where('active', 1)
+            ->orderBy('order')
+            ->get(['label', 'key']);
+
+        if ($sectionDefs->isEmpty()) {
+            return [[], []];
+        }
+
+        /* ---------------------------------
+     * 2. Base paper columns
+     * --------------------------------- */
+        $baseCols = [
+            'Paper ID' => 'id',
+            'DOI'      => 'doi',
+            'Authors'  => 'authors',
+            'Title'    => 'title',
+            'Year'     => 'year',
+        ];
+
+        if (Schema::hasColumn('papers', 'category')) {
+            $baseCols['Category'] = 'category';
+        }
+
+        /* ---------------------------------
+     * 3. Build column metadata
+     * --------------------------------- */
+        $columns = [];
+
+        foreach ($baseCols as $label => $col) {
+            $columns[] = [
+                'key'   => $this->labelToKey($label),
+                'label' => $label,
+            ];
+        }
+
+        foreach ($sectionDefs as $sec) {
+            $columns[] = [
+                'key'   => $sec->key,
+                'label' => $sec->label,
+            ];
+        }
+
+        /* ---------------------------------
+     * 4. Latest DONE review per paper
+     * --------------------------------- */
+        $latestDoneIds = DB::table('reviews')
+            ->selectRaw('MAX(id) AS id, paper_id')
+            ->where('user_id', $uid)
+            ->where('status', 'done')
+            ->groupBy('paper_id');
+
+        $query = DB::table('papers')
+            ->leftJoinSub($latestDoneIds, 'lr', 'lr.paper_id', '=', 'papers.id')
+            ->leftJoin('reviews as rv', function ($j) use ($uid) {
+                $j->on('rv.id', '=', 'lr.id')
+                    ->where('rv.user_id', '=', $uid);
+            })
+            ->where('papers.created_by', $uid)
+            ->select([
+                'papers.*',
+                'rv.review_sections',
+            ])
+            ->orderByDesc('papers.id');
+
+        if ($years = Arr::get($filters, 'years')) {
+            $query->whereIn('papers.year', $years);
+        }
+
+        /* ---------------------------------
+     * 5. Build rows
+     * --------------------------------- */
+
+        $rows = [];
+
+        foreach ($query->get() as $rec) {
+            $row = [];
+
+            // Base columns
+            foreach ($baseCols as $label => $col) {
+                $row[$this->labelToKey($label)] = $rec->{$col} ?? null;
+            }
+
+            // Decode review JSON
+            $rawSections = [];
+            if (!empty($rec->review_sections)) {
+                $rawSections = json_decode($rec->review_sections, true) ?: [];
+            }
+
+            // Normalize (LABEL → KEY)
+            $sections = $this->normalizeReviewSections($rawSections, $sectionDefs);
+
+            $hasReview = false;
+
+            // Assign section values (THIS WAS MISSING)
+            foreach ($sectionDefs as $sec) {
+                $value = $sections[$sec->key] ?? null;
+
+                if (!$keepHtml && is_string($value)) {
+                    $value = $this->cleanText($value);
+                }
+
+                if (!empty($value)) {
+                    $hasReview = true;
+                }
+
+                $row[$sec->key] = $value;
+            }
+
+            $row['_has_review'] = $hasReview;
+            $rows[] = $row;
+        }
+
+        return [$columns, $rows];
+    }
+
+
     /**
      * Build SYNOPSIS-like dataset for this user.
      */
@@ -267,10 +436,10 @@ class ReportController extends Controller
         $chapters = [];
         if (!empty($chapterIds)) {
             $rows = DB::table('chapters')
-                ->select(['id','title','body_html'])
+                ->select(['id', 'title', 'body_html'])
                 ->where('user_id', $uid)
                 ->whereIn('id', $chapterIds)
-                ->orderByRaw("FIELD(id," . implode(',', array_map('intval',$chapterIds)) . ")")
+                ->orderByRaw("FIELD(id," . implode(',', array_map('intval', $chapterIds)) . ")")
                 ->get();
 
             foreach ($rows as $ch) {
