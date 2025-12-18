@@ -3,45 +3,71 @@
 namespace App\Http\Controllers;
 
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\Storage;
 use Illuminate\Http\JsonResponse;
+use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
 use Illuminate\Validation\ValidationException;
 
 class EditorUploadController extends Controller
 {
     /**
-     * Handle CKEditor image upload.
+     * Handle CKEditor image upload (JWT authenticated).
+     *
+     * Route MUST use auth:api middleware
      */
     public function store(Request $request): JsonResponse
     {
+        /**
+         * 🔐 JWT authentication (explicit, predictable)
+         */
+        $user = Auth::guard('api')->user();
+
+        if (!$user) {
+            return response()->json([
+                'message' => 'Unauthenticated',
+            ], 401);
+        }
+
+        /**
+         * 🧪 Validate input
+         */
         $validated = $request->validate([
             'upload'   => 'required|file|image|mimes:jpg,jpeg,png,webp|max:5120',
             'paper_id' => 'nullable|integer',
         ]);
 
         $file    = $validated['upload'];
-        $userId  = optional($request->user())->id ?? 0;
         $paperId = $validated['paper_id'] ?? 'na';
 
-        // Extra safety: verify real MIME
+        /**
+         * 🔍 Extra MIME safety (defense-in-depth)
+         */
         $mime = $file->getMimeType();
-        if (!in_array($mime, ['image/jpeg', 'image/png', 'image/webp'])) {
+        if (!in_array($mime, ['image/jpeg', 'image/png', 'image/webp'], true)) {
             throw ValidationException::withMessages([
                 'upload' => 'Invalid image type.',
             ]);
         }
 
+        /**
+         * 🧾 Generate deterministic filename
+         * u<user>_p<paper>_<timestamp>_<rand>.ext
+         */
         $ext = strtolower($file->getClientOriginalExtension() ?: 'jpg');
 
-        $timestamp = now()->format('Ymd_His');
-        $random    = Str::random(6);
-
-        $fileName = "u{$userId}_p{$paperId}_{$timestamp}_{$random}.{$ext}";
+        $fileName = sprintf(
+            'u%d_p%s_%s_%s.%s',
+            $user->id,
+            $paperId,
+            now()->format('Ymd_His'),
+            Str::random(6),
+            $ext
+        );
 
         /**
-         * IMPORTANT:
-         * Ensure `uploads` disk is public and symlinked
+         * 💾 Store file
+         * uploads disk must be public + symlinked
          */
         $path = $file->storeAs(
             'editor',
@@ -49,10 +75,16 @@ class EditorUploadController extends Controller
             'uploads'
         );
 
+        /**
+         * 🌍 Public URL
+         */
         $url = Storage::disk('uploads')->url($path);
 
+        /**
+         * ✅ CKEditor REQUIRED RESPONSE FORMAT
+         */
         return response()->json([
-            'uploaded' => true,   // future-proof
+            'uploaded' => true,
             'url'      => $url,
         ], 201);
     }
