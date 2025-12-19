@@ -14,9 +14,10 @@ class SupervisorController extends Controller
 {
     protected function assertAdmin(Request $request): void
     {
-        if ($request->user()?->role !== 'admin') {
-            abort(403, 'Only admins can manage supervisors.');
+        if (!in_array($request->user()->role, ['admin', 'super_admin'])) {
+            abort(403);
         }
+
     }
 
     /**
