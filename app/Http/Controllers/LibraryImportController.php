@@ -160,36 +160,93 @@ class LibraryImportController extends Controller
         $csvFile = null;
         $sources = ['urls' => [], 'bibtex' => ''];
 
-        if ($request->isMethod('post') && Str::startsWith($request->header('Content-Type', ''), 'multipart/form-data')) {
-            // Multipart: files[], csv, meta(JSON)
+        // ---------------- Multipart/FormData ----------------
+        if (
+            $request->isMethod('post') &&
+            Str::startsWith($request->header('Content-Type', ''), 'multipart/form-data')
+        ) {
+            // Files[]
             if ($request->hasFile('files')) {
                 $request->validate([
                     'files'   => ['array', 'min:1'],
-                    'files.*' => ['file', 'max:51200'], // 50MB (KB)
+                    'files.*' => ['file', 'max:51200'], // 50 MB
                 ]);
                 $files = $request->file('files', []);
             }
+
+            // CSV
             if ($request->hasFile('csv')) {
-                $request->validate(['csv' => ['file', 'mimes:csv,txt', 'max:20480']]);
+                $request->validate([
+                    'csv' => ['file', 'mimes:csv,txt', 'max:20480'], // 20 MB
+                ]);
                 $csvFile = $request->file('csv');
             }
+
+            // meta JSON (optional)
             $meta = [];
             if ($request->filled('meta')) {
-                $meta = json_decode((string)$request->input('meta'), true) ?: [];
+                $meta = json_decode((string) $request->input('meta'), true) ?: [];
             }
-            $sources['urls']   = array_values(array_filter(array_map('trim', $meta['sources']['urls'] ?? [])));
-            $sources['bibtex'] = trim($meta['sources']['bibtex'] ?? '');
-        } else {
-            // JSON body
+
+            // URLs may come directly OR inside meta.sources
+            $directUrlsRaw = $request->input('urls', []);
+
+            // urls may arrive as:
+            // 1) array
+            // 2) JSON string: '["url1","url2"]'
+            // 3) plain string with newlines
+            $directUrls = [];
+
+            if (is_array($directUrlsRaw)) {
+                $directUrls = $directUrlsRaw;
+            } elseif (is_string($directUrlsRaw)) {
+                $decoded = json_decode($directUrlsRaw, true);
+                if (is_array($decoded)) {
+                    $directUrls = $decoded;
+                } else {
+                    // fallback: treat as newline-separated textarea
+                    $directUrls = preg_split('/\r\n|\r|\n/', $directUrlsRaw);
+                }
+            }
+            $metaUrls   = $meta['sources']['urls'] ?? [];
+
+            $allUrls = array_merge(
+                is_array($directUrls) ? $directUrls : [],
+                is_array($metaUrls)   ? $metaUrls   : []
+            );
+
+            $sources['urls'] = array_values(array_unique(
+                array_filter(
+                    array_map('trim', $allUrls),
+                    fn ($u) => is_string($u) && $u !== ''
+                )
+            ));
+
+            $sources['bibtex'] = is_string($meta['sources']['bibtex'] ?? null)
+                ? trim($meta['sources']['bibtex'])
+                : '';
+        }
+
+        // ---------------- JSON Body ----------------
+        else {
             $payload = $request->json()->all();
-            $urls    = $payload['sources']['urls']   ?? [];
-            $bibtex  = $payload['sources']['bibtex'] ?? '';
-            $sources['urls']   = array_values(array_filter(array_map('trim', is_array($urls) ? $urls : [])));
-            $sources['bibtex'] = is_string($bibtex) ? trim($bibtex) : '';
+
+            $urls = $payload['sources']['urls'] ?? [];
+            $bib  = $payload['sources']['bibtex'] ?? '';
+
+            $sources['urls'] = array_values(array_unique(
+                array_filter(
+                    array_map('trim', is_array($urls) ? $urls : []),
+                    fn ($u) => is_string($u) && $u !== ''
+                )
+            ));
+
+            $sources['bibtex'] = is_string($bib) ? trim($bib) : '';
         }
 
         return [$files, $csvFile, $sources];
     }
+
 
     /* ---------------- Files (Option-B) ---------------- */
 
