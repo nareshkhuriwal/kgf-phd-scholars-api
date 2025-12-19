@@ -326,17 +326,25 @@ class ReportController extends Controller
                     : (array)$rec->review_sections;
             }
             $lit = Arr::get($sections, 'Literature Review');
-            $lit = is_string($lit) ? $this->cleanText($lit) : (is_null($lit) ? null : $this->cleanText(json_encode($lit)));
+            $lit =
+                $sections['literature_review']
+                ?? $sections['Litracture Review']
+                ?? $sections['Literature Review']
+                ?? null;
 
-            if ($lit) {
+            if (is_string($lit) && trim(strip_tags($lit)) !== '') {
                 $literature[] = [
                     'paper_id' => $rec->paper_id,
                     'title'    => $rec->title,
                     'authors'  => $rec->authors,
                     'year'     => $rec->year,
-                    'text'     => $lit,
+                    // IMPORTANT: keep HTML
+                    'html'     => $lit,
+                    // optional plain text (for fallback)
+                    'text'     => $this->cleanText($lit),
                 ];
             }
+
         }
 
         // chapters selection (owner-scoped)
