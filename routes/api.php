@@ -25,7 +25,7 @@ use App\Http\Controllers\PaymentController;
 
 use App\Http\Controllers\EditorUploadController;
 use App\Http\Controllers\MonitoringController;
-
+use App\Http\Controllers\TagController;
 
 // Public or rate-limited auth endpoints
 Route::post('/auth/login', [AuthController::class, 'login']);
@@ -36,6 +36,7 @@ Route::post('/auth/verify-register-otp', [AuthController::class, 'verifyRegister
 // Forgot password via OTP
 Route::post('forgot-password/otp', [AuthController::class, 'sendPasswordOtp']);
 Route::post('reset-password/otp', [AuthController::class, 'resetPasswordWithOtp']);
+Route::get('/library/csv-template', [LibraryImportController::class, 'csvTemplate']);
 
 
 // Route::middleware(['auth:sanctum','role:super_admin'])->get('/monitoring/analytics', [MonitoringController::class, 'analytics']);
@@ -56,6 +57,7 @@ Route::middleware('auth:sanctum')->group(function () {
 
     Route::post('/editor/upload-image', [EditorUploadController::class, 'store']);
     Route::post('/editor/fetch-image', [EditorUploadController::class, 'fetch']);
+
 
 
     // Full list for tables
@@ -96,6 +98,10 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('/papers/{paper}/files', [PaperFileController::class, 'upload']);
     Route::delete('/papers/{paper}/files/{file}', [PaperFileController::class, 'destroy']);
     Route::post('/papers/bulk-delete', [PaperController::class, 'bulkDestroy']);
+
+    Route::get('/tags', [TagController::class, 'index']);
+    Route::post('/tags', [TagController::class, 'store']);
+    Route::delete('/tags/{tag}', [TagController::class, 'destroy']);
 
 
     Route::get('/papers/{paper}/comments', [PaperCommentController::class, 'index']);
