@@ -45,22 +45,55 @@ class ReportController extends Controller
     {
         $uid = $request->user()->id ?? abort(401, 'Unauthenticated');
 
-        $rows = Paper::query()
-            ->select(['id', 'title', 'authors', 'year', 'literature_review'])
-            ->where('created_by', $uid)
-            ->whereNotNull('literature_review')
-            ->orderByDesc('id')
+        // Latest review per paper for this user
+        $latestReviewIds = DB::table('reviews')
+            ->selectRaw('MAX(id) as id, paper_id')
+            ->where('user_id', $uid)
+            // ->where('status', 'done') // enable when ready
+            ->groupBy('paper_id');
+
+        $rows = DB::table('papers')
+            ->leftJoinSub($latestReviewIds, 'lr', 'lr.paper_id', '=', 'papers.id')
+            ->leftJoin('reviews as rv', function ($j) use ($uid) {
+                $j->on('rv.id', '=', 'lr.id')
+                ->where('rv.user_id', '=', $uid);
+            })
+            ->where('papers.created_by', $uid)
+            ->orderByDesc('papers.id')
+            ->select([
+                'papers.id',
+                'papers.title',
+                'papers.authors',
+                'papers.year',
+                'rv.review_sections',
+            ])
             ->get()
-            ->map(fn($p) => [
-                'id'     => $p->id,
-                'title'  => $p->title,
-                'authors' => $p->authors,
-                'year'   => $p->year,
-                'review' => $p->literature_review,
-            ]);
+            ->map(function ($rec) {
+                $sections = [];
+
+                if (!empty($rec->review_sections)) {
+                    $sections = json_decode($rec->review_sections, true) ?: [];
+                }
+
+                $lit =
+                    $sections['literature_review']
+                    ?? $sections['Literature Review']
+                    ?? null;
+
+                return [
+                    'id'      => $rec->id,
+                    'title'   => $rec->title,
+                    'authors' => $rec->authors,
+                    'year'    => $rec->year,
+                    'review'  => is_string($lit) ? $this->cleanText($lit) : null,
+                ];
+            })
+            ->filter(fn($r) => !empty($r['review']))
+            ->values();
 
         return response()->json($rows);
     }
+
 
     /* --------------------------- Utilities --------------------------- */
 
