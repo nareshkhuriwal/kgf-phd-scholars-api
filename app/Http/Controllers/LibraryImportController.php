@@ -481,90 +481,132 @@ class LibraryImportController extends Controller
         return [$created, $skipped, $errors];
     }
 
-    /**
-     * CSV importer that respects remaining quota.
-     * $remaining passed by reference and decremented for each created paper.
-     * Returns [$created, $skipped, $errors]
-     */
-    private function importFromCsvWithQuota(Request $request, UploadedFile $csvFile, int &$remaining): array
-    {
-        $reader = Reader::createFromPath($csvFile->getRealPath(), 'r');
-        $reader->setHeaderOffset(0);
-        $created = [];
-        $skipped = [];
-        $errors = [];
+/**
+ * CSV importer that respects remaining quota.
+ * Uses native PHP (fgetcsv) – no external libraries.
+ * Returns [$created, $skipped, $errors]
+ */
+private function importFromCsvWithQuota(Request $request, UploadedFile $csvFile, int &$remaining): array
+{
+    $created = [];
+    $skipped = [];
+    $errors  = [];
 
-        foreach ($reader->getRecords() as $row) {
-            if ($remaining <= 0) {
-                $skipped[] = ['row' => $row, 'reason' => 'Upload quota exceeded for your plan'];
+    if (($handle = fopen($csvFile->getRealPath(), 'r')) === false) {
+        return [[], [], [['error' => 'Unable to open CSV file']]];
+    }
+
+    // Read header row
+    $headers = fgetcsv($handle);
+    if (!$headers || !is_array($headers)) {
+        fclose($handle);
+        return [[], [], [['error' => 'Invalid or empty CSV header']]];
+    }
+
+    // Normalize headers (trim + lowercase)
+    $headers = array_map(
+        fn ($h) => strtolower(trim((string)$h)),
+        $headers
+    );
+
+    $rowNumber = 1; // header row
+
+    while (($row = fgetcsv($handle)) !== false) {
+        $rowNumber++;
+
+        if ($remaining <= 0) {
+            $skipped[] = ['row' => $rowNumber, 'reason' => 'Upload quota exceeded for your plan'];
+            continue;
+        }
+
+        // Skip empty lines
+        if (count(array_filter($row, fn ($v) => trim((string)$v) !== '')) === 0) {
+            continue;
+        }
+
+        // Combine header → row
+        if (count($headers) !== count($row)) {
+            $errors[] = [
+                'row'   => $rowNumber,
+                'error' => 'Column count mismatch',
+            ];
+            continue;
+        }
+
+        $rowData = array_combine($headers, $row);
+
+        try {
+            // Build Paper data
+            $data = [
+                'created_by' => $request->user()->id ?? null,
+                'source'     => 'csv',
+            ];
+
+            foreach (self::CSV_FIELD_MAP as $csvKey => $dbColumn) {
+                if (isset($rowData[$csvKey]) && trim((string)$rowData[$csvKey]) !== '') {
+                    $data[$dbColumn] = trim((string)$rowData[$csvKey]);
+                }
+            }
+
+            if (empty($data['title'])) {
+                $skipped[] = [
+                    'row'    => $rowNumber,
+                    'reason' => 'Missing title',
+                ];
                 continue;
             }
 
-            try {
-                $title = trim($row['title'] ?? '');
-                if ($title === '') {
-                    $skipped[] = ['row' => $row, 'reason' => 'Missing title'];
-                    continue;
-                }
+            // Create Paper
+            $paper = Paper::create($data);
 
-                // 1) Create paper first
-                $data = [
-                    'created_by' => $request->user()->id ?? null,
-                    'source'     => 'csv',
-                ];
+            // Optional PDF attachment
+            if (!empty($rowData['pdf_url'])) {
+                try {
+                    $resp = Http::timeout(20)->get(trim($rowData['pdf_url']));
+                    if ($resp->ok() && strlen($resp->body())) {
+                        $bytes  = $resp->body();
+                        $mime   = $resp->header('Content-Type', 'application/pdf');
+                        $disk   = 'uploads';
+                        $subdir = now()->format('Y/m');
+                        $orig   = basename(parse_url($rowData['pdf_url'], PHP_URL_PATH) ?: 'paper.pdf');
+                        $path   = "library/{$subdir}/" . Str::random(10) . "_" . $orig;
 
-                foreach (self::CSV_FIELD_MAP as $csvKey => $dbColumn) {
-                    if (array_key_exists($csvKey, $row) && trim((string)$row[$csvKey]) !== '') {
-                        $data[$dbColumn] = trim($row[$csvKey]);
+                        Storage::disk($disk)->put($path, $bytes);
+
+                        $paper->files()->create([
+                            'disk'          => $disk,
+                            'path'          => $path,
+                            'original_name' => $orig,
+                            'mime'          => $mime,
+                            'size_bytes'    => strlen($bytes),
+                            'checksum'      => hash('sha256', $bytes),
+                            'uploaded_by'   => $request->user()->id ?? null,
+                        ]);
                     }
+                } catch (\Throwable $e) {
+                    $errors[] = [
+                        'row'   => $rowNumber,
+                        'error' => 'pdf_url fetch failed: ' . $e->getMessage(),
+                    ];
                 }
-
-                if (empty($data['title'])) {
-                    $skipped[] = ['row' => $row, 'reason' => 'Missing title'];
-                    continue;
-                }
-
-                $paper = Paper::create($data);
-
-
-                // 2) Fetch and attach pdf_url if present
-                if (!empty($row['pdf_url'])) {
-                    try {
-                        $resp = Http::timeout(20)->get($row['pdf_url']);
-                        if ($resp->ok() && strlen($resp->body())) {
-                            $bytes  = $resp->body();
-                            $mime   = $resp->header('Content-Type', 'application/pdf');
-                            $disk   = 'uploads';
-                            $subdir = now()->format('Y/m');
-                            $orig   = basename(parse_url($row['pdf_url'], PHP_URL_PATH) ?: 'paper.pdf');
-                            $path   = "library/{$subdir}/" . Str::random(10) . "_" . $orig;
-
-                            Storage::disk($disk)->put($path, $bytes);
-
-                            $paper->files()->create([
-                                'disk'          => $disk,
-                                'path'          => $path,
-                                'original_name' => $orig,
-                                'mime'          => $mime,
-                                'size_bytes'    => strlen($bytes),
-                                'checksum'      => hash('sha256', $bytes),
-                                'uploaded_by'   => $request->user()->id ?? null,
-                            ]);
-                        }
-                    } catch (\Throwable $e) {
-                        $errors[] = ['row' => $row, 'error' => 'pdf_url fetch failed: ' . $e->getMessage()];
-                    }
-                }
-
-                $created[] = $paper->fresh('files');
-                $remaining--;
-            } catch (\Throwable $e) {
-                $errors[] = ['row' => $row, 'error' => $e->getMessage()];
             }
-        }
 
-        return [$created, $skipped, $errors];
+            $created[] = $paper->fresh('files');
+            $remaining--;
+
+        } catch (\Throwable $e) {
+            $errors[] = [
+                'row'   => $rowNumber,
+                'error' => $e->getMessage(),
+            ];
+        }
     }
+
+    fclose($handle);
+
+    return [$created, $skipped, $errors];
+}
+
 
     /* ---------------- Helpers ---------------- */
 
