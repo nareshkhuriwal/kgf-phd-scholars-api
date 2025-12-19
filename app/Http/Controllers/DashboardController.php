@@ -155,74 +155,105 @@ class DashboardController extends Controller
         ]);
     }
 
-    /**
-     * Filters endpoint for dropdowns:
-     *  - supervisors
-     *  - researchers
-     *  - supervisorResearcherMap (supervisor_id => [researcher_ids])
-     *
-     * Behaviour:
-     *  - Admin:
-     *      supervisors = all supervisors
-     *      researchers = all researchers
-     *  - Supervisor:
-     *      supervisors = [self]
-     *      researchers = mapped researchers (via invites)
-     *  - Researcher:
-     *      supervisors = supervisors who invited them (accepted)
-     *      researchers = [self]
-     */
-    public function filters(Request $req)
-    {
-        $user = $req->user() ?? abort(401, 'Unauthenticated');
-        $role = $user->role ?? 'researcher';
+/**
+ * Filters endpoint for dashboard dropdowns:
+ *  - supervisors
+ *  - researchers
+ *  - supervisorResearcherMap
+ *
+ * Rules:
+ *  - super_admin: sees ALL supervisors & researchers
+ *  - admin: sees ONLY users created by them
+ *  - supervisor: sees self + invited researchers
+ *  - researcher: sees self + supervisors who invited them
+ */
+public function filters(Request $req)
+{
+    $user = $req->user() ?? abort(401, 'Unauthenticated');
+    $role = $user->role;
+    $uid  = $user->id;
 
-        // ---------- Supervisors list ----------
-        if ($role === 'admin') {
-            $supervisors = User::where('role', 'supervisor')
-                ->select('id', 'name', 'email')
-                ->orderBy('name')
-                ->get();
-        } elseif ($role === 'supervisor') {
-            // only self
-            $supervisors = User::where('id', $user->id)
-                ->select('id', 'name', 'email')
-                ->get();
-        } else { // researcher → supervisors that invited them
-            $supervisors = DB::table('researcher_invites')
-                ->join('users', 'users.id', '=', 'researcher_invites.created_by')
-                ->where('researcher_invites.researcher_email', $user->email)
-                ->where('researcher_invites.status', 'accepted')
-                ->select('users.id', 'users.name', 'users.email')
-                ->distinct()
-                ->get();
-        }
+    /* ============================================================
+     * SUPERVISORS
+     * ============================================================ */
+    if ($role === 'super_admin') {
+        // Super admin → all supervisors
+        $supervisors = User::where('role', 'supervisor')
+            ->select('id', 'name', 'email')
+            ->orderBy('name')
+            ->get();
 
-        // ---------- Researchers list ----------
-        if ($role === 'admin') {
-            $researchers = User::where('role', 'researcher')
-                ->select('id', 'name', 'email')
-                ->orderBy('name')
-                ->get();
-        } elseif ($role === 'supervisor') {
-            $researchers = $this->fetchResearchersForSupervisor($user->id);
-        } else { // researcher: just self
-            $researchers = User::where('id', $user->id)
-                ->select('id', 'name', 'email')
-                ->get();
-        }
+    } elseif ($role === 'admin') {
+        // Admin → only supervisors created by them
+        $supervisors = User::where('role', 'supervisor')
+            ->where('created_by', $uid)
+            ->select('id', 'name', 'email')
+            ->orderBy('name')
+            ->get();
 
-        // ---------- Supervisor → researcher mapping ----------
-        $map = $this->buildSupervisorResearcherMap($supervisors->pluck('id')->all());
+    } elseif ($role === 'supervisor') {
+        // Supervisor → only self
+        $supervisors = User::where('id', $uid)
+            ->select('id', 'name', 'email')
+            ->get();
 
-        return response()->json([
-            'data' => [
-                'supervisors'             => $supervisors,
-                'researchers'             => $researchers,
-                'supervisorResearcherMap' => $map,
-            ],
-        ]);
+    } else {
+        // Researcher → supervisors who invited them
+        $supervisors = DB::table('researcher_invites')
+            ->join('users', 'users.id', '=', 'researcher_invites.created_by')
+            ->where('researcher_invites.researcher_email', $user->email)
+            ->where('researcher_invites.status', 'accepted')
+            ->select('users.id', 'users.name', 'users.email')
+            ->distinct()
+            ->orderBy('users.name')
+            ->get();
     }
+
+    /* ============================================================
+     * RESEARCHERS
+     * ============================================================ */
+    if ($role === 'super_admin') {
+        // Super admin → all researchers
+        $researchers = User::where('role', 'researcher')
+            ->select('id', 'name', 'email')
+            ->orderBy('name')
+            ->get();
+
+    } elseif ($role === 'admin') {
+        // Admin → only researchers created by them
+        $researchers = User::where('role', 'researcher')
+            ->where('created_by', $uid)
+            ->select('id', 'name', 'email')
+            ->orderBy('name')
+            ->get();
+
+    } elseif ($role === 'supervisor') {
+        // Supervisor → invited researchers
+        $researchers = $this->fetchResearchersForSupervisor($uid);
+
+    } else {
+        // Researcher → only self
+        $researchers = User::where('id', $uid)
+            ->select('id', 'name', 'email')
+            ->get();
+    }
+
+    /* ============================================================
+     * SUPERVISOR → RESEARCHER MAP
+     * (only for visible supervisors)
+     * ============================================================ */
+    $supervisorIds = collect($supervisors)->pluck('id')->all();
+    $map = $this->buildSupervisorResearcherMap($supervisorIds);
+
+    return response()->json([
+        'data' => [
+            'supervisors'             => $supervisors,
+            'researchers'             => $researchers,
+            'supervisorResearcherMap' => $map,
+        ],
+    ]);
+}
+
 
     /**
      * Optional: dedicated endpoint to fetch researchers for a supervisor
