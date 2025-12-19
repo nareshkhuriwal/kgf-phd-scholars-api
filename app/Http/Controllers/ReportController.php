@@ -325,7 +325,7 @@ class ReportController extends Controller
                     ? (json_decode($rec->review_sections, true) ?: [])
                     : (array)$rec->review_sections;
             }
-            $lit = Arr::get($sections, 'Litracture Review');
+            $lit = Arr::get($sections, 'Literature Review');
             $lit = is_string($lit) ? $this->cleanText($lit) : (is_null($lit) ? null : $this->cleanText(json_encode($lit)));
 
             if ($lit) {
