@@ -18,32 +18,6 @@ class ReportController extends Controller
     /**
      * Quick JSON for ROL page (owner-scoped)
      */
-    public function rolOld(Request $request)
-    {
-        $uid = $request->user()->id ?? abort(401, 'Unauthenticated');
-
-        $visibleUserIds = $this->visibleUserIdsForCurrent($request);
-
-        $rows = Paper::query()
-            ->select(['id', 'doi', 'authors', 'title', 'year', ...(Schema::hasColumn('papers', 'category') ? ['category'] : [])])
-            ->whereIn('created_by', $visibleUserIds)
-            ->orderByDesc('created_at')
-            ->get()
-            ->map(function ($p) {
-                return [
-                    'id'       => $p->id,
-                    'doi'      => $p->doi,
-                    'authors'  => $p->authors,
-                    'title'    => $p->title,
-                    'year'     => $p->year,
-                    'category' => Schema::hasColumn('papers', 'category') ? $p->category : null,
-                    'keyIssue' => method_exists($p, 'getAttribute') ? $p->getAttribute('key_issue') : null,
-                ];
-            });
-
-        return response()->json($rows);
-    }
-
 
     public function rol(Request $request)
     {
@@ -168,7 +142,7 @@ class ReportController extends Controller
      * 2. Base paper columns
      * --------------------------------- */
         $baseCols = [
-            'Paper ID'      => 'paper_code',
+            'Paper ID'      => 'id',
             'Title'         => 'title',
             'Author(s)'     => 'authors',
             'DOI'           => 'doi',
