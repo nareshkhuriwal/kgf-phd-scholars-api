@@ -8,12 +8,36 @@ use Illuminate\Support\Facades\Storage;
 
 class Paper extends Model
 {
+
     protected $fillable = [
-        'paper_code','title','authors','doi','year','category','journal','issn_isbn','publisher','place',
-        'volume','issue','page_no','area','key_issue',
-        'review_html','solution_method_html','related_work_html','input_params_html','hw_sw_html',
-        'results_html','advantages_html','limitations_html','remarks_html','meta','created_by'
+        'paper_code',
+        'title',
+        'authors',
+        'doi',
+        'year',
+        'category',
+        'journal',
+        'issn_isbn',
+        'publisher',
+        'place',
+        'volume',
+        'issue',
+        'page_no',
+        'area',
+        // 'key_issue',
+        // 'review_html',
+        // 'solution_method_html',
+        // 'related_work_html',
+        // 'input_params_html',
+        // 'hw_sw_html',
+        // 'results_html',
+        // 'advantages_html',
+        // 'limitations_html',
+        // 'remarks_html',
+        'meta',
+        'created_by',
     ];
+
 
     protected $casts = ['meta' => 'array'];
 

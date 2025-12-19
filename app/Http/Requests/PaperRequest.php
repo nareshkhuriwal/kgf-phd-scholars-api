@@ -25,18 +25,18 @@ class PaperRequest extends FormRequest
             'issue'      => ['nullable','string','max:50'],
             'page_no'    => ['nullable','string','max:50'],
             'area'       => ['nullable','string','max:255'],
-            'key_issue'  => ['nullable','string'],
 
             // ROL HTML fields (optional)
-            'review_html'            => ['nullable','string'],
-            'solution_method_html'   => ['nullable','string'],
-            'related_work_html'      => ['nullable','string'],
-            'input_params_html'      => ['nullable','string'],
-            'hw_sw_html'             => ['nullable','string'],
-            'results_html'           => ['nullable','string'],
-            'advantages_html'        => ['nullable','string'],
-            'limitations_html'       => ['nullable','string'],
-            'remarks_html'           => ['nullable','string'],
+            // 'key_issue'  => ['nullable','string'],
+            // 'review_html'            => ['nullable','string'],
+            // 'solution_method_html'   => ['nullable','string'],
+            // 'related_work_html'      => ['nullable','string'],
+            // 'input_params_html'      => ['nullable','string'],
+            // 'hw_sw_html'             => ['nullable','string'],
+            // 'results_html'           => ['nullable','string'],
+            // 'advantages_html'        => ['nullable','string'],
+            // 'limitations_html'       => ['nullable','string'],
+            // 'remarks_html'           => ['nullable','string'],
 
             'meta' => ['nullable','array'],
             'file' => ['nullable','file','mimes:pdf','max:51200'], // 50MB
