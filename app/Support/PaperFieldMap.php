@@ -6,7 +6,7 @@ class PaperFieldMap
 {
     public const MAP = [
         'Paper ID' => 'paper_id',
-        'Litracture Review' => 'litracture_review',
+        'Literature Review' => 'literature_review',
         'Category of Paper' => 'category_of_paper',
         'DOI' => 'doi',
         'Author(s)' => 'authors',

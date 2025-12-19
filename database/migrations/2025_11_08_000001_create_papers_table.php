@@ -25,7 +25,7 @@ return new class extends Migration {
             $t->text('key_issue')->nullable();
 
             // Rich text HTML fields
-            $t->longText('review_html')->nullable();              // Litracture Review
+            $t->longText('review_html')->nullable();              // Literature Review
             $t->longText('solution_method_html')->nullable();     // Solution Approach / Methodology used
             $t->longText('related_work_html')->nullable();
             $t->longText('input_params_html')->nullable();

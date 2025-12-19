@@ -32,7 +32,7 @@ class ReviewController extends Controller
         // Backward-compat: hydrate empty review_sections from legacy fields
         if (empty($review->review_sections)) {
             $map = [
-                'Litracture Review' => $review->html,
+                'Literature Review' => $review->html,
                 'Key Issue'         => $review->key_issue,
                 'Remarks'           => $review->remarks,
             ];
