@@ -16,7 +16,7 @@ class ReviewResource extends JsonResource
         if (!is_array($sections)) {
             // fall back mapping from legacy columns to a sections object
             $sections = [
-                'Litracture Review'                    => $this->html ?? null,
+                'Literature Review'                    => $this->html ?? null,
                 'Key Issue'                            => $this->key_issue ?? null,
                 'Solution Approach / Methodology used' => $this->solution_method_html ?? null,
                 'Related Work'                         => $this->related_work_html ?? null,
@@ -30,27 +30,33 @@ class ReviewResource extends JsonResource
         }
 
         return [
-            'paper_id'        => $this->paper_id,
-            'user_id'         => $this->user_id,
-            'status'          => $this->status,
+            /* -------- Review meta -------- */
+            'review_id'   => $this->id,
+            'paper_id'    => $this->paper_id,
+            'user_id'     => $this->user_id,
+            'status'      => $this->status,
+            'updated_at'  => $this->updated_at,
+            'created_at'  => $this->created_at,
+            /* -------- Flattened paper meta (ROL / DOCX ready) -------- */
+            'title'       => optional($paper)->title,
+            'authors'     => optional($paper)->authors,
+            'year'        => optional($paper)->year,
+            'doi'         => optional($paper)->doi,
+            'journal'     => optional($paper)->journal,
+            'issn_isbn'   => optional($paper)->issn_isbn,
+            'publisher'   => optional($paper)->publisher,
+            'volume'      => optional($paper)->volume,
+            'issue'       => optional($paper)->issue,
+            'page_no'     => optional($paper)->page_no,
+            'category'    => optional($paper)->category,
+            'area'        => optional($paper)->area,
+            'place'       => optional($paper)->place,
 
-            // expose structured review and legacy html
-            'review_sections' => $sections,
-            'html'            => $this->html,
+            /* -------- Critical for Review UI -------- */
+            'pdf_url'     => optional($paper)->pdf_url,
 
-            // FLATTEN paper meta so Review UI can read it directly
-            'title'           => optional($paper)->title,
-            'authors'         => optional($paper)->authors,
-            'year'            => optional($paper)->year,
-            'doi'             => optional($paper)->doi,
-
-            // CRITICAL: pdf_url at root
-            'pdf_url' => optional($paper)->pdf_url,
-
-            // still include nested paper summary if you like
-            'paper'           => new PaperSummaryResource($paper),
-
-            'updated_at'      => $this->updated_at,
+            /* -------- Optional nested summary -------- */
+            'paper'       => new PaperSummaryResource($paper),
         ];
     }
 }

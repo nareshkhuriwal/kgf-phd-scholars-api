@@ -17,20 +17,20 @@ use App\Http\Controllers\Concerns\SupervisesResearchers;
 class PaperController extends Controller
 {
     use OwnerAuthorizes, SupervisesResearchers;
-    
+
     public function index(Request $req)
     {
         // Scope to current user's papers
         // $q = Paper::query()
         //     ->where('created_by', $req->user()->id)
         //     ->withCount('files');
-            
+
         $visibleUserIds = $this->visibleUserIdsForCurrent($req);
 
         $q = Paper::query()
             ->whereIn('created_by', $visibleUserIds)
             ->withCount('files');
-            
+
 
         if ($s = $req->get('search')) {
             $q->where(function ($w) use ($s) {
@@ -47,20 +47,22 @@ class PaperController extends Controller
         // support common variants (snake_case, camelCase, limit)
         $perRaw = $req->get('per_page', $req->get('perPage', $req->get('limit', null)));
         $per = (int) ($perRaw ?: 10);
-        
+
         // guard: reasonable min/max to avoid massive pages
         $min = 5;
         $max = 200;
         if ($per < $min) $per = $min;
         if ($per > $max) $per = $max;
-        
+
         // explicitly pass page too (safer when client sets page)
         $page = (int) $req->get('page', 1);
-        
+
         $sortBy = $req->get('sort_by', 'id');
         $sortDir = strtolower($req->get('sort_dir', 'asc')) === 'asc' ? 'asc' : 'desc';
         $allowed = ['id', 'title', 'authors', 'year', 'doi', 'created_at', 'updated_at'];
-        if (!in_array($sortBy, $allowed)) { $sortBy = 'title'; }
+        if (!in_array($sortBy, $allowed)) {
+            $sortBy = 'title';
+        }
         $q->orderBy($sortBy, $sortDir);
         $p = $q->paginate($per, ['*'], 'page', $page);
 
@@ -104,9 +106,11 @@ class PaperController extends Controller
         $userId = $req->user()->id ?? null;
 
         $paper = DB::transaction(function () use ($req, $paper, $userId) {
-            $paper->update($req->validated());
+            $data = $req->validated();
+            unset($data['file']);
 
-            // Optional: if client uploads a new file during update, attach it too
+            $paper->update($data);
+
             if ($req->hasFile('file')) {
                 $this->attachFileToPaper($paper, $req->file('file'), $userId);
             }
@@ -116,6 +120,44 @@ class PaperController extends Controller
 
         return new PaperResource($paper);
     }
+
+    /**
+     * Upload / replace PDF file for an existing paper.
+     * POST /api/papers/{paper}/file
+     */
+    public function updateFile(Request $req, Paper $paper)
+    {
+        $this->authorizeOwner($paper, 'created_by');
+
+        $userId = $req->user()->id ?? null;
+
+        $req->validate([
+            'file' => ['required', 'file', 'mimes:pdf', 'max:51200'], // 50MB
+        ]);
+
+        DB::transaction(function () use ($paper, $req, $userId) {
+
+            // OPTIONAL: remove old files (recommended = replace behavior)
+            foreach ($paper->files as $old) {
+                try {
+                    Storage::disk($old->disk)->delete($old->path);
+                } catch (\Throwable $e) {
+                    // ignore filesystem issues
+                }
+                $old->delete();
+            }
+
+            // Attach new file
+            $this->attachFileToPaper(
+                $paper,
+                $req->file('file'),
+                $userId
+            );
+        });
+
+        return new PaperResource($paper->fresh('files'));
+    }
+
 
     public function destroy(Paper $paper)
     {
@@ -231,5 +273,4 @@ class PaperController extends Controller
             'uploaded_by'   => $userId,
         ]);
     }
-
 }
