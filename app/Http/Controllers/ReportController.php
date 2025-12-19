@@ -123,115 +123,6 @@ class ReportController extends Controller
     /**
      * Build ROL dataset (columns + rows) from latest DONE review per paper for this user.
      */
-    protected function buildRolDatasetOld(int $uid, array $filters, array $selections, array $opts = []): array
-    {
-        $keepHtml = (bool)($opts['keepHtml'] ?? false);
-
-        $sectionLabels = [
-            'Litracture Review',
-            'Key Issue',
-            'Solution Approach / Methodology used',
-            'Related Work',
-            'Input Parameters used',
-            'Hardware / Software / Technology Used',
-            'Results',
-            'Key advantages',
-            'Limitations',
-            'Citations',
-            'Remarks',
-        ];
-
-        $baseCols = [
-            'Paper ID' => 'id',
-            'DOI'      => 'doi',
-            'Authors'  => 'authors',
-            'Title'    => 'title',
-            'Year'     => 'year',
-        ];
-        if (Schema::hasColumn('papers', 'category')) {
-            $baseCols['Category'] = 'category';
-        }
-
-        $include      = Arr::get($selections, 'include', []);
-        $includeOrder = Arr::get($selections, 'includeOrder', $sectionLabels);
-
-        $selectedLabels = [];
-        foreach ($includeOrder as $label) {
-            if (!empty($include[$label])) $selectedLabels[] = $label;
-        }
-
-        $columns = [];
-        foreach ($baseCols as $label => $colname) {
-            $columns[] = ['key' => $this->labelToKey($label), 'label' => $label];
-        }
-        foreach ($selectedLabels as $label) {
-            $columns[] = ['key' => $this->labelToKey($label), 'label' => $label];
-        }
-
-        // latest DONE review per paper (owner-scoped: papers.created_by = $uid and reviews.user_id = $uid)
-        $latestDoneIds = DB::table('reviews')
-            ->selectRaw('MAX(id) AS id, paper_id')
-            ->where('user_id', $uid)
-            ->where('status', 'done')
-            ->groupBy('paper_id');
-
-        $q = DB::table('papers')
-            ->leftJoinSub($latestDoneIds, 'lr', 'lr.paper_id', '=', 'papers.id')
-            ->leftJoin('reviews as rv', function ($j) use ($uid) {
-                $j->on('rv.id', '=', 'lr.id')->where('rv.user_id', '=', $uid);
-            })
-            ->select([
-                'papers.id',
-                'papers.doi',
-                'papers.authors',
-                'papers.title',
-                'papers.year',
-                ...(Schema::hasColumn('papers', 'category') ? ['papers.category'] : []),
-                'rv.review_sections',
-            ])
-            ->where('papers.created_by', $uid)
-            ->orderByDesc('papers.id');
-
-        if ($years = Arr::get($filters, 'years', [])) {
-            $q->whereIn('papers.year', $years);
-        }
-
-        $rows = [];
-        foreach ($q->get() as $rec) {
-            $row = [];
-            foreach ($baseCols as $label => $colname) {
-                $row[$this->labelToKey($label)] = $rec->{$colname} ?? null;
-            }
-
-            $sections = [];
-            if (!empty($rec->review_sections)) {
-                $sections = is_string($rec->review_sections)
-                    ? (json_decode($rec->review_sections, true) ?: [])
-                    : (array)$rec->review_sections;
-            }
-
-            foreach ($selectedLabels as $label) {
-                $val = Arr::get($sections, $label);
-                if (!$keepHtml && is_string($val)) $val = $this->cleanText($val);
-                $row[$this->labelToKey($label)] = $val;
-            }
-
-            $rows[] = $row;
-        }
-
-        if (count($selectedLabels) > 0) {
-            $selectedKeys = array_map(fn($lab) => $this->labelToKey($lab), $selectedLabels);
-            $rows = array_values(array_filter($rows, function ($r) use ($selectedKeys) {
-                foreach ($selectedKeys as $k) {
-                    if (array_key_exists($k, $r) && $r[$k] !== null && $r[$k] !== '') return true;
-                }
-                return false;
-            }));
-        }
-
-        return [$columns, $rows];
-    }
-
     private function normalizeReviewSections(array $sections, $sectionDefs): array
     {
         $normalized = [];
@@ -277,12 +168,22 @@ class ReportController extends Controller
      * 2. Base paper columns
      * --------------------------------- */
         $baseCols = [
-            'Paper ID' => 'id',
-            'DOI'      => 'doi',
-            'Authors'  => 'authors',
-            'Title'    => 'title',
-            'Year'     => 'year',
+            'Paper ID'      => 'paper_code',
+            'Title'         => 'title',
+            'Author(s)'     => 'authors',
+            'DOI'           => 'doi',
+            'Year'          => 'year',
+            'Category'      => 'category',
+            'Journal'       => 'journal',
+            'ISSN / ISBN'   => 'issn_isbn',
+            'Publisher'     => 'publisher',
+            'Place'         => 'place',
+            'Volume'        => 'volume',
+            'Issue'         => 'issue',
+            'Page No'       => 'page_no',
+            'Area / Sub Area' => 'area',
         ];
+
 
         if (Schema::hasColumn('papers', 'category')) {
             $baseCols['Category'] = 'category';
