@@ -117,6 +117,7 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('/my-papers', [MyPaperController::class, 'store']);
     Route::get('/my-papers/{id}', [MyPaperController::class, 'show']);
     Route::put('/my-papers/{id}', [MyPaperController::class, 'update']);
+    Route::delete('/my-papers/{id}', [MyPaperController::class, 'destroy']);
 
     // 🔽 NEW — section management
     Route::post('/my-papers/{id}/sections', [AuthoredPaperSectionController::class, 'addSection']);

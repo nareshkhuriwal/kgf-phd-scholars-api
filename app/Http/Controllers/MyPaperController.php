@@ -117,4 +117,27 @@ class MyPaperController extends Controller
 
         return response()->json(['success' => true]);
     }
+
+    /**
+ * Delete a paper and its sections
+ */
+public function destroy(Request $request, int $id): JsonResponse
+{
+    $paper = AuthoredPaper::where('id', $id)
+        ->where('user_id', $request->user()->id)
+        ->firstOrFail();
+
+    // Delete child sections first (safe even without FK cascade)
+    AuthoredPaperSection::where('authored_paper_id', $paper->id)->delete();
+
+    // Delete the paper
+    $paper->delete();
+
+    return response()->json([
+        'success' => true,
+        'id' => $id,
+    ]);
+}
+
+
 }
