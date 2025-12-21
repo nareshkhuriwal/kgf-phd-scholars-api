@@ -1,4 +1,5 @@
 <?php
+
 namespace App\Http\Requests;
 
 use Illuminate\Foundation\Http\FormRequest;
@@ -8,7 +9,10 @@ use Illuminate\Support\Facades\Log;
 
 class SavedReportRequest extends FormRequest
 {
-    public function authorize(): bool { return true; }
+    public function authorize(): bool
+    {
+        return true;
+    }
 
     /** Log + coerce JSON before validation */
     protected function prepareForValidation(): void
@@ -40,8 +44,8 @@ class SavedReportRequest extends FormRequest
             }
         }
 
-        // If filters/selections arrived as JSON strings, coerce to arrays
-        foreach (['filters','selections'] as $k) {
+        // If filters/selections/headerFooter arrived as JSON strings, coerce to arrays
+        foreach (['filters', 'selections', 'headerFooter'] as $k) {
             $v = $this->input($k);
             if (is_string($v)) {
                 $arr = json_decode($v, true);
@@ -60,6 +64,7 @@ class SavedReportRequest extends FormRequest
             'template' => $this->input('template'),
             'hasFilters' => is_array($this->input('filters')),
             'hasSelections' => is_array($this->input('selections')),
+            'hasHeaderFooter' => is_array($this->input('headerFooter')),
         ]);
     }
 
@@ -81,6 +86,13 @@ class SavedReportRequest extends FormRequest
             'selections.include'       => 'required|array',
             'selections.includeOrder'  => 'required|array',
             'selections.chapters'      => 'nullable|array',
+
+            // Header/Footer settings (optional, but if present must be valid)
+            'headerFooter'              => 'nullable|array',
+            'headerFooter.headerTitle'  => 'nullable|string|max:500',
+            'headerFooter.headerRight'  => 'nullable|string|max:100',  // NEW FIELD
+            'headerFooter.footerLeft'   => 'nullable|string|max:500',
+            'headerFooter.footerCenter' => 'nullable|string|max:500',
         ];
     }
 

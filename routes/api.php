@@ -59,7 +59,6 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('/editor/fetch-image', [EditorUploadController::class, 'fetch']);
 
 
-
     // Full list for tables
     Route::get('/users', [UserController::class, 'index']);
     // Lightweight dropdown for Reports builder
