@@ -27,6 +27,8 @@ use App\Http\Controllers\EditorUploadController;
 use App\Http\Controllers\MonitoringController;
 use App\Http\Controllers\TagController;
 use App\Http\Controllers\MyPaperController;
+use App\Http\Controllers\AuthoredPaperSectionController;
+
 
 // Public or rate-limited auth endpoints
 Route::post('/auth/login', [AuthController::class, 'login']);
@@ -115,6 +117,13 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('/my-papers', [MyPaperController::class, 'store']);
     Route::get('/my-papers/{id}', [MyPaperController::class, 'show']);
     Route::put('/my-papers/{id}', [MyPaperController::class, 'update']);
+
+    // 🔽 NEW — section management
+    Route::post('/my-papers/{id}/sections', [AuthoredPaperSectionController::class, 'addSection']);
+    Route::put('/my-papers/sections/{sectionId}', [AuthoredPaperSectionController::class, 'updateSection']);
+    Route::delete('/my-papers/sections/{sectionId}', [AuthoredPaperSectionController::class, 'deleteSection']);
+    Route::put('/my-papers/{id}/sections/reorder', [AuthoredPaperSectionController::class, 'reorderSections']);
+
 
 
     Route::get('/researchers/invites', [ResearcherInviteController::class, 'index']);
