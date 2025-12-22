@@ -178,16 +178,12 @@ class ReviewController extends Controller
         $request->user() ?? abort(401, 'Unauthenticated');
         $this->authorizeOwner($paper, 'created_by');
 
-        $review = Review::firstOrCreate(
-            [
-                'paper_id' => $paper->id,
-                'user_id'  => $request->user()->id,
-            ],
-            [
-                'status'          => Review::STATUS_DRAFT,
-                'review_sections' => [],
-            ]
-        );
+        $review = Review::where('paper_id', $paper->id)
+        ->where('user_id', $request->user()->id)
+        ->first();
+        if (!$review) {
+            abort(404, 'Review not found');
+        }
 
         // Ensure relations required by ReviewResource
         $review->load(['paper.files']);
