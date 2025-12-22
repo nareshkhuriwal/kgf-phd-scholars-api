@@ -35,6 +35,12 @@ class PaperResource extends JsonResource
             // optional convenience for the viewer
             'pdf_url' => $primaryUrl,
 
+            // Creator name
+            'created_by' => $this->whenLoaded('creator', 
+                fn() => $this->creator?->name,
+                fn() => null
+            ),
+
             // PAPER COMMENTS (NEW)
             'comments' => PaperCommentResource::collection(
                 $this->whenLoaded('comments')

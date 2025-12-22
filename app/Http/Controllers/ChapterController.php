@@ -10,21 +10,36 @@ use App\Models\Paper;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 use App\Http\Controllers\Concerns\OwnerAuthorizes;
+use App\Support\ResolvesApiScope;
 
 class ChapterController extends Controller
 {
-    use OwnerAuthorizes;
+    use OwnerAuthorizes, ResolvesApiScope;
 
     /**
-     * List chapters owned by the current user.
+     * List chapters owned by accessible users.
      */
     public function index(Request $request): JsonResponse
     {
-        $userId = $request->user()->id;
+        $request->user() ?? abort(401, 'Unauthenticated');
+
+        Log::info('Chapter index called', [
+            'user_id' => $request->user()->id,
+            'role' => $request->user()->role
+        ]);
+
+        // Get accessible user IDs
+        $userIds = $this->resolveApiUserIds($request);
+
+        Log::info('Accessible user IDs for chapters', [
+            'user_ids' => $userIds,
+            'count' => count($userIds)
+        ]);
 
         $query = Chapter::query()
-            ->where('user_id', $userId)
+            ->whereIn('user_id', $userIds)
             ->withCount('items')
             ->orderBy('order_index');
 
@@ -34,9 +49,13 @@ class ChapterController extends Controller
 
         $perPage = $request->integer('per_page', 25);
 
-        return response()->json(
-            $query->paginate($perPage)
-        );
+        $result = $query->paginate($perPage);
+
+        Log::info('Chapters retrieved', [
+            'count' => $result->total()
+        ]);
+
+        return response()->json($result);
     }
 
     /**
@@ -44,8 +63,17 @@ class ChapterController extends Controller
      */
     public function chapterOptions(Request $request)
     {
+        $request->user() ?? abort(401, 'Unauthenticated');
+
+        Log::info('Chapter options called', [
+            'user_id' => $request->user()->id
+        ]);
+
+        // Get accessible user IDs
+        $userIds = $this->resolveApiUserIds($request);
+
         $query = Chapter::query()
-            ->where('user_id', $request->user()->id);
+            ->whereIn('user_id', $userIds);
 
         if ($search = trim((string) $request->get('search'))) {
             $query->where('title', 'like', "%{$search}%");
@@ -69,18 +97,32 @@ class ChapterController extends Controller
      */
     public function store(ChapterRequest $request): JsonResponse
     {
-        $userId = $request->user()->id;
+        $userId = $request->user()->id ?? abort(401, 'Unauthenticated');
+
+        Log::info('Creating new chapter', [
+            'user_id' => $userId
+        ]);
 
         $data = $request->validated();
         $data['user_id']    = $userId;
         $data['created_by'] = $userId;
         $data['updated_by'] = $userId;
+
+        // Decode base64 HTML if present
         if (isset($data['body_html'])) {
-            $data['body_html'] = base64_decode($data['body_html'], true) ?: '';
+            $decoded = base64_decode($data['body_html'], true);
+            if ($decoded === false) {
+                Log::error('Invalid body_html encoding during chapter creation');
+                abort(422, 'Invalid HTML encoding for body_html');
+            }
+            $data['body_html'] = $decoded;
         }
 
-
         $chapter = Chapter::create($data);
+
+        Log::info('Chapter created successfully', [
+            'chapter_id' => $chapter->id
+        ]);
 
         return response()->json($chapter, 201);
     }
@@ -90,7 +132,21 @@ class ChapterController extends Controller
      */
     public function show(Chapter $chapter): JsonResponse
     {
-        $this->authorizeOwner($chapter);
+        $request = request();
+        $request->user() ?? abort(401, 'Unauthenticated');
+
+        Log::info('Chapter show called', [
+            'chapter_id' => $chapter->id,
+            'user_id' => $request->user()->id
+        ]);
+
+        // Check if user has access to this chapter's owner
+        $this->authorizeUserAccess($request, $chapter->user_id);
+
+        Log::info('User authorized to view chapter', [
+            'chapter_id' => $chapter->id,
+            'chapter_owner' => $chapter->user_id
+        ]);
 
         return response()->json(
             $chapter->load('items.paper:id,title,authors,year,doi,paper_code,created_at,updated_at')
@@ -100,20 +156,17 @@ class ChapterController extends Controller
     /**
      * Update chapter metadata or body.
      */
-    // public function update(ChapterRequest $request, Chapter $chapter): JsonResponse
-    // {
-    //     // $this->authorizeOwner($chapter);
-
-    //     $data = $request->validated();
-    //     $data['updated_by'] = $request->user()->id;
-
-    //     $chapter->update($data);
-
-    //     return response()->json($chapter->fresh());
-    // }
     public function update(ChapterRequest $request, Chapter $chapter): JsonResponse
     {
-        $this->authorizeOwner($chapter);
+        $request->user() ?? abort(401, 'Unauthenticated');
+
+        Log::info('Chapter update called', [
+            'chapter_id' => $chapter->id,
+            'user_id' => $request->user()->id
+        ]);
+
+        // Check if user has access to this chapter's owner
+        $this->authorizeUserAccess($request, $chapter->user_id);
 
         $data = $request->validated();
         $data['updated_by'] = $request->user()->id;
@@ -137,6 +190,10 @@ class ChapterController extends Controller
                 $decoded = base64_decode($data[$field], true);
 
                 if ($decoded === false) {
+                    Log::error('Invalid HTML encoding during chapter update', [
+                        'chapter_id' => $chapter->id,
+                        'field' => $field
+                    ]);
                     abort(422, "Invalid HTML encoding for {$field}");
                 }
 
@@ -146,6 +203,10 @@ class ChapterController extends Controller
 
         $chapter->update($data);
 
+        Log::info('Chapter updated successfully', [
+            'chapter_id' => $chapter->id
+        ]);
+
         return response()->json($chapter->fresh());
     }
 
@@ -154,11 +215,26 @@ class ChapterController extends Controller
      */
     public function destroy(Chapter $chapter): JsonResponse
     {
-        $this->authorizeOwner($chapter);
+        $request = request();
+        $request->user() ?? abort(401, 'Unauthenticated');
+
+        Log::info('Chapter destroy called', [
+            'chapter_id' => $chapter->id,
+            'user_id' => $request->user()->id
+        ]);
+
+        // Check if user has access to this chapter's owner
+        $this->authorizeUserAccess($request, $chapter->user_id);
 
         DB::transaction(function () use ($chapter) {
+            $itemCount = $chapter->items()->count();
             $chapter->items()->delete();
             $chapter->delete();
+
+            Log::info('Chapter deleted with items', [
+                'chapter_id' => $chapter->id,
+                'items_deleted' => $itemCount
+            ]);
         });
 
         return response()->json(['ok' => true]);
@@ -169,7 +245,15 @@ class ChapterController extends Controller
      */
     public function addItem(Request $request, Chapter $chapter): JsonResponse
     {
-        $this->authorizeOwner($chapter);
+        $request->user() ?? abort(401, 'Unauthenticated');
+
+        Log::info('Adding item to chapter', [
+            'chapter_id' => $chapter->id,
+            'user_id' => $request->user()->id
+        ]);
+
+        // Check if user has access to this chapter's owner
+        $this->authorizeUserAccess($request, $chapter->user_id);
 
         $data = $request->validate([
             'paper_id'       => ['required', 'exists:papers,id'],
@@ -178,8 +262,10 @@ class ChapterController extends Controller
             'citation_style' => ['nullable', 'string', 'max:32'],
         ]);
 
+        // Check if user has access to the paper's owner
         $paper = Paper::select(
             'id',
+            'created_by',
             'review_html',
             'key_issue',
             'solution_method_html',
@@ -191,6 +277,9 @@ class ChapterController extends Controller
             'limitations_html',
             'remarks_html'
         )->findOrFail($data['paper_id']);
+
+        // Verify access to paper
+        $this->authorizeUserAccess($request, $paper->created_by);
 
         $field = $data['source_field'];
 
@@ -210,6 +299,12 @@ class ChapterController extends Controller
             'updated_by'    => $request->user()->id,
         ]);
 
+        Log::info('Chapter item added successfully', [
+            'chapter_id' => $chapter->id,
+            'item_id' => $item->id,
+            'paper_id' => $paper->id
+        ]);
+
         return response()->json(
             $item->load('paper:id,title,authors,year,doi,paper_code'),
             201
@@ -221,13 +316,33 @@ class ChapterController extends Controller
      */
     public function removeItem(Chapter $chapter, ChapterItem $item): JsonResponse
     {
-        $this->authorizeOwner($chapter);
+        $request = request();
+        $request->user() ?? abort(401, 'Unauthenticated');
+
+        Log::info('Removing item from chapter', [
+            'chapter_id' => $chapter->id,
+            'item_id' => $item->id,
+            'user_id' => $request->user()->id
+        ]);
+
+        // Check if user has access to this chapter's owner
+        $this->authorizeUserAccess($request, $chapter->user_id);
 
         if ($item->chapter_id !== $chapter->id) {
+            Log::warning('Item does not belong to chapter', [
+                'chapter_id' => $chapter->id,
+                'item_chapter_id' => $item->chapter_id,
+                'item_id' => $item->id
+            ]);
             abort(404);
         }
 
         $item->delete();
+
+        Log::info('Chapter item removed successfully', [
+            'chapter_id' => $chapter->id,
+            'item_id' => $item->id
+        ]);
 
         return response()->json(['ok' => true]);
     }
@@ -237,7 +352,11 @@ class ChapterController extends Controller
      */
     public function reorder(Request $request): JsonResponse
     {
-        $userId = $request->user()->id;
+        $userId = $request->user()->id ?? abort(401, 'Unauthenticated');
+
+        Log::info('Chapter reorder called', [
+            'user_id' => $userId
+        ]);
 
         $data = $request->validate([
             'items'               => ['required', 'array', 'min:1'],
@@ -247,13 +366,22 @@ class ChapterController extends Controller
 
         $ids = collect($data['items'])->pluck('id');
 
-        $chapters = Chapter::where('user_id', $userId)
+        // Get accessible user IDs
+        $userIds = $this->resolveApiUserIds($request);
+
+        // Fetch chapters that belong to accessible users
+        $chapters = Chapter::whereIn('user_id', $userIds)
             ->whereIn('id', $ids)
             ->get()
             ->keyBy('id');
 
         if ($chapters->count() !== $ids->count()) {
-            abort(403, 'One or more chapters do not belong to the user.');
+            Log::warning('Some chapters do not belong to accessible users', [
+                'requested_ids' => $ids->toArray(),
+                'found_count' => $chapters->count(),
+                'requested_count' => $ids->count()
+            ]);
+            abort(403, 'One or more chapters do not belong to accessible users.');
         }
 
         DB::transaction(function () use ($data, $chapters, $userId) {
@@ -265,9 +393,13 @@ class ChapterController extends Controller
             }
         });
 
+        Log::info('Chapters reordered successfully', [
+            'chapter_count' => count($data['items'])
+        ]);
+
         return response()->json([
             'ok'    => true,
-            'items' => Chapter::where('user_id', $userId)
+            'items' => Chapter::whereIn('user_id', $userIds)
                 ->orderBy('order_index')
                 ->get(['id', 'title', 'order_index', 'updated_at', 'created_at']),
         ]);

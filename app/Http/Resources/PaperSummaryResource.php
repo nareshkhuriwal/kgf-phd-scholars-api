@@ -15,9 +15,15 @@ class PaperSummaryResource extends JsonResource
             'authors'   => $this->{'Author(s)'} ?? $this->authors,
             'year'      => $this->Year ?? $this->year,
             'doi'       => $this->DOI ?? $this->doi,
+            'created_by'      => $this->whenLoaded(
+                'creator',
+                fn() => $this->creator?->name,
+                fn() => null
+            ),
+            'created_at'      => $this->created_at,
             'updated_at' => $this->updated_at,
             'review_status' => optional($this->reviews->first())->status ?? 'pending',
-            'pdf_url'   => $this->pdf_path ? asset('storage/'.$this->pdf_path) : null,
+            'pdf_url'   => $this->pdf_path ? asset('storage/' . $this->pdf_path) : null,
         ];
     }
 }
