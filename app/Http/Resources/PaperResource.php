@@ -32,23 +32,10 @@ class PaperResource extends JsonResource
             'page_no'       => $this->page_no,
             'area'          => $this->area,
 
-            // HTML fields
-            // 'key_issue'            => $this->key_issue,
-            // 'literature_review'    => $this->review_html,
-            // 'solution_methodology' => $this->solution_method_html,
-            // 'related_work'         => $this->related_work_html,
-            // 'input_parameters'     => $this->input_params_html,
-            // 'hardware_software'    => $this->hw_sw_html,
-            // 'results'              => $this->results_html,
-            // 'key_advantages'       => $this->advantages_html,
-            // 'limitations'          => $this->limitations_html,
-            // 'remarks'              => $this->remarks_html,
-
-
             // optional convenience for the viewer
             'pdf_url' => $primaryUrl,
 
-            // ✅ PAPER COMMENTS (NEW)
+            // PAPER COMMENTS (NEW)
             'comments' => PaperCommentResource::collection(
                 $this->whenLoaded('comments')
             ),

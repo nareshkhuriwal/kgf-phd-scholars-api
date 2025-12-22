@@ -11,6 +11,7 @@ use App\Http\Resources\ReviewResource;
 use App\Models\Paper;
 use App\Models\Review;
 use Illuminate\Http\Request;
+use App\Http\Resources\FlatReviewResource;
 
 class ReviewController extends Controller
 {
@@ -29,9 +30,11 @@ class ReviewController extends Controller
         }
 
         // IMPORTANT: load paper with files so ReviewResource can expose pdf_url
-        $review->load(['paper.files']);
+        // $review->load(['paper.files']);
+        // return new ReviewResource($review);
+        $review->load(['paper.files', 'paper.comments.user', 'paper.comments.children.user']);
+        return new FlatReviewResource($review);
 
-        return new ReviewResource($review);
     }
 
     /**
@@ -84,9 +87,11 @@ class ReviewController extends Controller
         }
 
         $review->save();
-        $review->load(['paper.files']);
+        // $review->load(['paper.files']);
+        // return new ReviewResource($review);
+        $review->load(['paper.files', 'paper.comments.user', 'paper.comments.children.user']);
+        return new FlatReviewResource($review);
 
-        return new ReviewResource($review);
     }
 
 
@@ -124,9 +129,12 @@ class ReviewController extends Controller
         }
 
         $review->save();
-        $review->load(['paper.files']);
+        // $review->load(['paper.files']);
+        // return new ReviewResource($review);
 
-        return new ReviewResource($review);
+        $review->load(['paper.files', 'paper.comments.user', 'paper.comments.children.user']);
+        return new FlatReviewResource($review);
+
     }
 
 
@@ -149,9 +157,12 @@ class ReviewController extends Controller
 
         $review->status = $request->input('status'); // draft | in_progress | done | archived
         $review->save();
-        $review->load(['paper.files']);
+        // $review->load(['paper.files']);
+        // return new ReviewResource($review);
 
-        return new ReviewResource($review);
+        $review->load(['paper.files', 'paper.comments.user', 'paper.comments.children.user']);
+        return new FlatReviewResource($review);
+
     }
 
     /**
@@ -171,9 +182,13 @@ class ReviewController extends Controller
             ]
         );
 
-        return response()->json([
-            'review_sections' => $review->review_sections ?? [],
-            'status'          => $review->status,
-        ]);
+        // return response()->json([
+        //     'review_sections' => $review->review_sections ?? [],
+        //     'status'          => $review->status,
+        // ]);
+
+        $review->load(['paper.files', 'paper.comments.user', 'paper.comments.children.user']);
+        return new FlatReviewResource($review);
+
     }
 }
