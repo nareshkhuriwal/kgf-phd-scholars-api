@@ -15,3 +15,6 @@ storage
 /storage/framework/cache/data
 
 /vendor/
+uploads
+/tests
+/tests/*.sqlite

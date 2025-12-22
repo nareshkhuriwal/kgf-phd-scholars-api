@@ -8,23 +8,32 @@ use App\Http\Requests\BulkDeleteSavedReportsRequest;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Log;
 use App\Http\Controllers\Concerns\OwnerAuthorizes;
-use App\Http\Controllers\Concerns\SupervisesResearchers;
-
+use App\Support\ResolvesApiScope;
 
 class SavedReportController extends Controller
 {
-    use OwnerAuthorizes, SupervisesResearchers;
+    use OwnerAuthorizes, ResolvesApiScope;
 
-    // LIST with search + pagination (scoped to owner)
+    // LIST with search + pagination (scoped to accessible users)
     public function index(Request $req)
     {
-        // $q = SavedReport::query()
-        //     ->where('created_by', $req->user()->id);
+        $req->user() ?? abort(401, 'Unauthenticated');
 
-        $visibleUserIds = $this->visibleUserIdsForCurrent($req);
+        Log::info('SavedReport index called', [
+            'user_id' => $req->user()->id,
+            'role' => $req->user()->role
+        ]);
+
+        // Get accessible user IDs
+        $userIds = $this->resolveApiUserIds($req);
+
+        Log::info('Accessible user IDs for saved reports', [
+            'user_ids' => $userIds,
+            'count' => count($userIds)
+        ]);
 
         $q = SavedReport::query()
-            ->whereIn('created_by', $visibleUserIds);
+            ->whereIn('created_by', $userIds);
             
         if ($s = $req->get('search')) {
             $q->where(function ($w) use ($s) {
@@ -41,29 +50,59 @@ class SavedReportController extends Controller
         if (!in_array($sort, $allowed, true)) $sort = 'updated_at';
 
         $per = (int) $req->get('per_page', 25);
-        return response()->json($q->orderBy($sort,$dir)->paginate($per));
+        $result = $q->orderBy($sort,$dir)->paginate($per);
+
+        Log::info('Saved reports retrieved', [
+            'total' => $result->total(),
+            'per_page' => $per
+        ]);
+
+        return response()->json($result);
     }
 
     // READ one (owner-guarded)
-    public function show($id)
+    public function show(Request $req, $id)
     {
+        $req->user() ?? abort(401, 'Unauthenticated');
+
+        Log::info('SavedReport show called', [
+            'report_id' => $id,
+            'user_id' => $req->user()->id
+        ]);
+
         $row = SavedReport::findOrFail($id);
-        $this->authorizeOwner($row, 'created_by');
+
+        // Check if user has access to this report's owner
+        $this->authorizeUserAccess($req, $row->created_by);
+
+        Log::info('User authorized to view saved report', [
+            'report_id' => $row->id,
+            'report_owner' => $row->created_by
+        ]);
 
         return response()->json($row);
     }
 
     public function store(SavedReportRequest $req)
     {
-        Log::info('[SavedReportController@store] hit');
-        $data = $req->validated();
-        Log::debug('[SavedReportController@store] validated', $data);
+        $userId = $req->user()->id ?? abort(401, 'Unauthenticated');
 
-        $data['created_by'] = optional($req->user())->id;
-        $data['updated_by'] = optional($req->user())->id;
+        Log::info('SavedReport store called', [
+            'user_id' => $userId
+        ]);
+
+        $data = $req->validated();
+        Log::debug('SavedReport store validated', $data);
+
+        $data['created_by'] = $userId;
+        $data['updated_by'] = $userId;
 
         $row = SavedReport::create($data);
-        Log::info('[SavedReportController@store] created', ['id' => $row->id]);
+
+        Log::info('Saved report created successfully', [
+            'report_id' => $row->id,
+            'name' => $row->name
+        ]);
 
         return response()->json($row, 201);
     }
@@ -71,45 +110,98 @@ class SavedReportController extends Controller
     // UPDATE (owner-guarded)
     public function update(SavedReportRequest $req, $id)
     {
-        Log::info('[SavedReportController@update] hit', ['id' => $id]);
+        $req->user() ?? abort(401, 'Unauthenticated');
+
+        Log::info('SavedReport update called', [
+            'report_id' => $id,
+            'user_id' => $req->user()->id
+        ]);
 
         $row  = SavedReport::findOrFail($id);
-        $this->authorizeOwner($row, 'created_by');
+
+        // Check if user has access to this report's owner
+        $this->authorizeUserAccess($req, $row->created_by);
 
         $data = $req->validated();
-        Log::debug('[SavedReportController@update] validated', $data);
+        Log::debug('SavedReport update validated', $data);
 
-        $data['updated_by'] = optional($req->user())->id;
+        $data['updated_by'] = $req->user()->id;
 
         $row->update($data);
-        Log::info('[SavedReportController@update] updated', ['id' => $row->id]);
+
+        Log::info('Saved report updated successfully', [
+            'report_id' => $row->id
+        ]);
 
         return response()->json($row->refresh());
     }
 
     // DELETE one (owner-guarded)
-    public function destroy($id)
+    public function destroy(Request $req, $id)
     {
+        $req->user() ?? abort(401, 'Unauthenticated');
+
+        Log::info('SavedReport destroy called', [
+            'report_id' => $id,
+            'user_id' => $req->user()->id
+        ]);
+
         $row = SavedReport::findOrFail($id);
-        $this->authorizeOwner($row, 'created_by');
+
+        // Check if user has access to this report's owner
+        $this->authorizeUserAccess($req, $row->created_by);
+
+        Log::info('User authorized to delete saved report', [
+            'report_id' => $row->id,
+            'report_owner' => $row->created_by
+        ]);
 
         $row->delete();
+
+        Log::info('Saved report deleted successfully', [
+            'report_id' => $id
+        ]);
+
         return response()->json(['ok' => true, 'deleted' => (int)$id]);
     }
 
-    // BULK DELETE (owner-guarded per-id)
+    // BULK DELETE (accessible user-guarded per-id)
     public function bulkDestroy(BulkDeleteSavedReportsRequest $req)
     {
-        $userId = auth()->id();
+        $req->user() ?? abort(401, 'Unauthenticated');
+
         $ids = $req->validated()['ids'];
 
-        // Delete only the current user's rows; ignore others silently
+        Log::info('SavedReport bulk destroy called', [
+            'user_id' => $req->user()->id,
+            'requested_ids' => $ids,
+            'count' => count($ids)
+        ]);
+
+        // Get accessible user IDs
+        $userIds = $this->resolveApiUserIds($req);
+
+        // Delete only accessible user's rows; ignore others silently
         $ownedIds = SavedReport::whereIn('id', $ids)
-            ->where('created_by', $userId)
+            ->whereIn('created_by', $userIds)
             ->pluck('id')
             ->all();
 
-        SavedReport::whereIn('id', $ownedIds)->delete();
+        Log::info('Saved reports filtered by accessible users', [
+            'requested_count' => count($ids),
+            'accessible_count' => count($ownedIds),
+            'accessible_ids' => $ownedIds
+        ]);
+
+        if (!empty($ownedIds)) {
+            SavedReport::whereIn('id', $ownedIds)->delete();
+
+            Log::info('Saved reports bulk deleted successfully', [
+                'deleted_count' => count($ownedIds)
+            ]);
+        } else {
+            Log::warning('No accessible saved reports found for bulk deletion');
+        }
 
         return response()->json(['ok'=>true,'deleted'=>$ownedIds]);
     }

@@ -21,6 +21,10 @@ class ReviewResource extends JsonResource
                 'user_id'         => $this->user_id,
                 'status'          => $this->status,
                 'review_sections' => $sections,
+                'created_by'      => $this->whenLoaded('creator', 
+                    fn() => $this->creator?->name,
+                    fn() => null
+                ),
                 'created_at'      => $this->created_at,
                 'updated_at'      => $this->updated_at,
             ],
