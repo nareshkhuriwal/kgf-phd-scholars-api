@@ -10,7 +10,7 @@ class EnsureRole
     /**
      * Handle an incoming request.
      *
-     * Usage: ->middleware('role:super_admin') or ->middleware('role:admin,super_admin')
+     * Usage: ->middleware('role:superuser') or ->middleware('role:admin,superuser')
      *
      * @param  \Illuminate\Http\Request  $request
      * @param  \Closure  $next
@@ -25,7 +25,7 @@ class EnsureRole
             return response()->json(['message' => 'Unauthenticated.'], 401);
         }
 
-        // Normalize roles: comma-separated string like "admin,super_admin"
+        // Normalize roles: comma-separated string like "admin,superuser"
         $allowed = [];
         if ($roles) {
             $allowed = array_map(function ($r) {

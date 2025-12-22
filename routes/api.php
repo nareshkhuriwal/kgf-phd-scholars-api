@@ -43,7 +43,7 @@ Route::get('/library/csv-template', [LibraryImportController::class, 'csvTemplat
 
 
 
-// Route::middleware(['auth:sanctum','role:super_admin'])->get('/monitoring/analytics', [MonitoringController::class, 'analytics']);
+// Route::middleware(['auth:sanctum','role:superuser'])->get('/monitoring/analytics', [MonitoringController::class, 'analytics']);
 
 Route::middleware('auth:sanctum')->group(function () {
     Route::get('/auth/me', [AuthController::class, 'me']);
@@ -51,7 +51,7 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('auth/change-password', [AuthController::class, 'changePassword']);
 
     Route::get('/monitoring/analytics', [MonitoringController::class, 'analytics'])
-        ->middleware(['auth:sanctum', 'role:super_admin']);
+        ->middleware(['auth:sanctum', 'role:superuser']);
 
     Route::put('/profile/me', [ProfileController::class, 'update']);          // update profile
     Route::patch('/profile/me', [ProfileController::class, 'update']);        // partial update
