@@ -169,6 +169,9 @@ class ReviewController extends Controller
     /**
      * READ sections only
      * GET /reviews/{paper}/sections
+     *
+     * IMPORTANT:
+     * Returns the SAME flat response as updateSection()
      */
     public function sections(Request $request, Paper $paper)
     {
@@ -176,16 +179,19 @@ class ReviewController extends Controller
         $this->authorizeOwner($paper, 'created_by');
 
         $review = Review::firstOrCreate(
-            ['paper_id' => $paper->id, 'user_id' => $request->user()->id],
+            [
+                'paper_id' => $paper->id,
+                'user_id'  => $request->user()->id,
+            ],
             [
                 'status'          => Review::STATUS_DRAFT,
                 'review_sections' => [],
             ]
         );
 
-        return response()->json([
-            'review_sections' => $review->review_sections ?? [],
-            'status'          => $review->status,
-        ]);
+        // Ensure relations required by ReviewResource
+        $review->load(['paper.files']);
+
+        return new ReviewResource($review);
     }
 }
