@@ -21,23 +21,11 @@ class ReviewController extends Controller
         $request->user() ?? abort(401, 'Unauthenticated');
         $this->authorizeOwner($paper, 'created_by');
 
-        $review = Review::firstOrCreate(
-            ['paper_id' => $paper->id, 'user_id' => $request->user()->id],
-            [
-                'status'          => Review::STATUS_DRAFT,
-                'review_sections' => [],
-            ]
-        );
-
-        // Backward-compat: hydrate empty review_sections from legacy fields
-        if (empty($review->review_sections)) {
-            $map = [
-                'Literature Review' => $review->html,
-                'Key Issue'         => $review->key_issue,
-                'Remarks'           => $review->remarks,
-            ];
-            $review->review_sections = array_filter($map, fn($v) => filled($v));
-            $review->save();
+        $review = Review::where('paper_id', $paper->id)
+            ->where('user_id', $request->user()->id)
+            ->first();
+        if (!$review) {
+            abort(404, 'Review not found');
         }
 
         // IMPORTANT: load paper with files so ReviewResource can expose pdf_url
@@ -169,25 +157,23 @@ class ReviewController extends Controller
     /**
      * READ sections only
      * GET /reviews/{paper}/sections
-     *
-     * IMPORTANT:
-     * Returns the SAME flat response as updateSection()
      */
     public function sections(Request $request, Paper $paper)
     {
         $request->user() ?? abort(401, 'Unauthenticated');
         $this->authorizeOwner($paper, 'created_by');
 
-        $review = Review::where('paper_id', $paper->id)
-        ->where('user_id', $request->user()->id)
-        ->first();
-        if (!$review) {
-            abort(404, 'Review not found');
-        }
+        $review = Review::firstOrCreate(
+            ['paper_id' => $paper->id, 'user_id' => $request->user()->id],
+            [
+                'status'          => Review::STATUS_DRAFT,
+                'review_sections' => [],
+            ]
+        );
 
-        // Ensure relations required by ReviewResource
-        $review->load(['paper.files']);
-
-        return new ReviewResource($review);
+        return response()->json([
+            'review_sections' => $review->review_sections ?? [],
+            'status'          => $review->status,
+        ]);
     }
 }
