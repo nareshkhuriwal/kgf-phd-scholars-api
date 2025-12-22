@@ -3,7 +3,7 @@
 namespace App\Http\Resources;
 
 use Illuminate\Http\Resources\Json\JsonResource;
-use Illuminate\Support\Facades\Storage;
+use App\Http\Resources\PaperCommentResource;
 
 class PaperResource extends JsonResource
 {
@@ -47,6 +47,11 @@ class PaperResource extends JsonResource
 
             // optional convenience for the viewer
             'pdf_url' => $primaryUrl,
+
+            // ✅ PAPER COMMENTS (NEW)
+            'comments' => PaperCommentResource::collection(
+                $this->whenLoaded('comments')
+            ),
 
             // Related files (true relation)
             'files' => $this->whenLoaded('files', fn() =>
