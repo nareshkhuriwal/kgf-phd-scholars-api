@@ -49,6 +49,38 @@ trait ResolvesDashboardScope
             return $ids;
         };
 
+        $supervisorsForAdmin = function (int $adminId): array {
+            $ids = DB::table('users')
+                ->where('role', 'supervisor')
+                ->where('created_by', $adminId)
+                ->pluck('id')
+                ->all();
+            
+            Log::debug("supervisorsForAdmin($adminId)", [
+                'count' => count($ids),
+                'ids' => $ids
+            ]);
+            return $ids;
+        };
+
+        $researchersForAdminSupervisors = function (int $adminId) use ($supervisorsForAdmin, $researchersForSupervisor): array {
+            $supervisorIds = $supervisorsForAdmin($adminId);
+            $researcherIds = [];
+
+            foreach ($supervisorIds as $supervisorId) {
+                $researcherIds = array_merge($researcherIds, $researchersForSupervisor($supervisorId));
+            }
+
+            $researcherIds = array_values(array_unique($researcherIds));
+
+            Log::debug("researchersForAdminSupervisors($adminId)", [
+                'supervisor_count' => count($supervisorIds),
+                'researcher_count' => count($researcherIds)
+            ]);
+
+            return $researcherIds;
+        };
+
         // -------- Researcher: always self --------
         if ($role === 'researcher') {
             Log::info('Researcher scope: returning self', ['user_id' => $user->id]);
@@ -63,18 +95,10 @@ trait ResolvesDashboardScope
                     return [$user->id];
 
                 case 'my_researchers':
-                    $researchers = $researchersForSupervisor($user->id);
-                    Log::info('Supervisor scope: my_researchers', [
-                        'supervisor_id' => $user->id,
-                        'researcher_ids' => $researchers,
-                        'count' => count($researchers)
-                    ]);
-                    return $researchers;
-
                 case 'all_researchers':
-                    // Same as my_researchers for supervisor
+                    // For supervisor, both mean "their researchers"
                     $researchers = $researchersForSupervisor($user->id);
-                    Log::info('Supervisor scope: all_researchers', [
+                    Log::info("Supervisor scope: {$scope}", [
                         'supervisor_id' => $user->id,
                         'researcher_ids' => $researchers,
                         'count' => count($researchers)
@@ -82,6 +106,7 @@ trait ResolvesDashboardScope
                     return $researchers;
 
                 case 'researcher':
+                    // Specific researcher selected from dropdown
                     if ($target) {
                         $allowed = $researchersForSupervisor($user->id);
                         $result = in_array($target, $allowed, true) ? [$target] : [];
@@ -123,73 +148,196 @@ trait ResolvesDashboardScope
                     Log::info('Admin scope: self', ['user_id' => $user->id]);
                     return [$user->id];
 
+                case 'supervisor':
+                    // Specific supervisor selected from dropdown
+                    if ($target) {
+                        $mySupervisors = $supervisorsForAdmin($user->id);
+                        $result = in_array($target, $mySupervisors, true) ? [$target] : [];
+                        Log::info('Admin scope: specific supervisor', [
+                            'target' => $target,
+                            'my_supervisors' => $mySupervisors,
+                            'result' => $result
+                        ]);
+                        return $result;
+                    }
+                    Log::warning('Admin scope: supervisor but no target specified');
+                    return [];
+
                 case 'researcher':
-                    $result = $target ? [$target] : [];
-                    Log::info('Admin scope: specific researcher', [
-                        'target' => $target,
-                        'result' => $result
+                    // Specific researcher selected from dropdown
+                    if ($target) {
+                        $myResearchers = $researchersForAdminSupervisors($user->id);
+                        $result = in_array($target, $myResearchers, true) ? [$target] : [];
+                        Log::info('Admin scope: specific researcher', [
+                            'target' => $target,
+                            'my_researchers' => $myResearchers,
+                            'result' => $result
+                        ]);
+                        return $result;
+                    }
+                    Log::warning('Admin scope: researcher but no target specified');
+                    return [];
+
+                case 'all_researchers':
+                    // All researchers under admin's supervisors
+                    $result = $researchersForAdminSupervisors($user->id);
+                    Log::info('Admin scope: all_researchers', [
+                        'admin_id' => $user->id,
+                        'count' => count($result)
                     ]);
                     return $result;
 
-                case 'supervisor':
-                    $result = $target ? [$target] : [];
-                    Log::info('Admin scope: specific supervisor', [
-                        'target' => $target,
-                        'result' => $result
+                case 'all_supervisors':
+                case 'my_supervisors':
+                    // All supervisors created by this admin
+                    $result = $supervisorsForAdmin($user->id);
+                    Log::info("Admin scope: {$scope}", [
+                        'admin_id' => $user->id,
+                        'count' => count($result)
                     ]);
                     return $result;
+
+                case 'my_researchers':
+                    // Researchers under a specific supervisor
+                    if ($target) {
+                        $mySupervisors = $supervisorsForAdmin($user->id);
+                        if (in_array($target, $mySupervisors, true)) {
+                            $result = $researchersForSupervisor($target);
+                            Log::info('Admin scope: researchers for specific supervisor', [
+                                'supervisor_id' => $target,
+                                'researcher_ids' => $result,
+                                'count' => count($result)
+                            ]);
+                            return $result;
+                        }
+                        Log::warning('Admin scope: supervisor not owned by admin', [
+                            'target' => $target,
+                            'admin_id' => $user->id
+                        ]);
+                        return [];
+                    }
+                    // All researchers under all admin's supervisors
+                    $result = $researchersForAdminSupervisors($user->id);
+                    Log::info('Admin scope: all researchers under my supervisors', [
+                        'admin_id' => $user->id,
+                        'count' => count($result)
+                    ]);
+                    return $result;
+
+                case 'all':
+                    // self + all supervisors + all researchers
+                    $result = array_values(array_unique(array_merge(
+                        [$user->id],
+                        $supervisorsForAdmin($user->id),
+                        $researchersForAdminSupervisors($user->id)
+                    )));
+                    Log::info('Admin scope: all (self + supervisors + researchers)', [
+                        'admin_id' => $user->id,
+                        'count' => count($result),
+                        'breakdown' => [
+                            'admin' => 1,
+                            'supervisors' => count($supervisorsForAdmin($user->id)),
+                            'researchers' => count($researchersForAdminSupervisors($user->id))
+                        ]
+                    ]);
+                    return $result;
+
+                default:
+                    Log::warning('Admin scope: unknown scope, returning self', [
+                        'scope' => $scope
+                    ]);
+                    return [$user->id];
+            }
+        }
+
+        // -------- Superuser --------
+        if ($role === 'superuser') {
+            switch ($scope) {
+                case 'self':
+                    Log::info('Superuser scope: self', ['user_id' => $user->id]);
+                    return [$user->id];
+
+                case 'supervisor':
+                    // Specific supervisor selected from dropdown
+                    if ($target) {
+                        Log::info('Superuser scope: specific supervisor', ['target' => $target]);
+                        return [$target];
+                    }
+                    Log::warning('Superuser scope: supervisor but no target specified');
+                    return [];
+
+                case 'researcher':
+                    // Specific researcher selected from dropdown
+                    if ($target) {
+                        Log::info('Superuser scope: specific researcher', ['target' => $target]);
+                        return [$target];
+                    }
+                    Log::warning('Superuser scope: researcher but no target specified');
+                    return [];
+
+                case 'admin':
+                    // Specific admin selected from dropdown
+                    if ($target) {
+                        Log::info('Superuser scope: specific admin', ['target' => $target]);
+                        return [$target];
+                    }
+                    Log::warning('Superuser scope: admin but no target specified');
+                    return [];
 
                 case 'all_researchers':
                     $result = $allByRole('researcher');
-                    Log::info('Admin scope: all_researchers', [
+                    Log::info('Superuser scope: all_researchers', [
                         'count' => count($result)
                     ]);
                     return $result;
 
                 case 'all_supervisors':
                     $result = $allByRole('supervisor');
-                    Log::info('Admin scope: all_supervisors', [
+                    Log::info('Superuser scope: all_supervisors', [
+                        'count' => count($result)
+                    ]);
+                    return $result;
+
+                case 'all_admins':
+                    $result = $allByRole('admin');
+                    Log::info('Superuser scope: all_admins', [
                         'count' => count($result)
                     ]);
                     return $result;
 
                 case 'my_researchers':
+                    // Researchers under a specific supervisor
                     if ($target) {
                         $result = $researchersForSupervisor($target);
-                        Log::info('Admin scope: my_researchers for specific supervisor', [
+                        Log::info('Superuser scope: researchers for specific supervisor', [
                             'supervisor_id' => $target,
-                            'researcher_ids' => $result,
                             'count' => count($result)
                         ]);
                         return $result;
                     }
-                    // union for all supervisors
-                    $result = DB::table('researcher_invites')
-                        ->join('users', 'users.email', '=', 'researcher_invites.researcher_email')
-                        ->where('researcher_invites.status', 'accepted')
-                        ->whereNull('researcher_invites.revoked_at')
-                        ->distinct()
-                        ->pluck('users.id')
-                        ->all();
-                    Log::info('Admin scope: my_researchers for all supervisors', [
+                    // All researchers
+                    $result = $allByRole('researcher');
+                    Log::info('Superuser scope: all researchers (no supervisor specified)', [
                         'count' => count($result)
                     ]);
                     return $result;
 
                 case 'all':
                 default:
-                    // all supervisors + all researchers + admin
+                    // Everyone in the system
                     $result = array_values(array_unique(array_merge(
                         [$user->id],
                         $allByRole('researcher'),
-                        $allByRole('supervisor')
+                        $allByRole('supervisor'),
+                        $allByRole('admin')
                     )));
-                    Log::info('Admin scope: all users', [
+                    Log::info('Superuser scope: all users', [
                         'count' => count($result),
                         'breakdown' => [
-                            'admin' => 1,
+                            'superuser' => 1,
                             'researchers' => count($allByRole('researcher')),
-                            'supervisors' => count($allByRole('supervisor'))
+                            'supervisors' => count($allByRole('supervisor')),
+                            'admins' => count($allByRole('admin'))
                         ]
                     ]);
                     return $result;

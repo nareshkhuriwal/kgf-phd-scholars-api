@@ -8,23 +8,36 @@ use Illuminate\Support\Arr;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Facades\Storage;
-use App\Http\Controllers\Concerns\SupervisesResearchers;
-
+use Illuminate\Support\Facades\Log;
+use App\Support\ResolvesApiScope;
+use App\Support\ResolvesDashboardScope;
 
 class ReportController extends Controller
 {
-    use SupervisesResearchers;
+    use ResolvesApiScope, ResolvesDashboardScope;
 
     /**
-     * Quick JSON for ROL page (owner-scoped)
+     * Quick JSON for ROL page (accessible users scoped)
      */
-
     public function rol(Request $request)
     {
-        $uid = $request->user()->id ?? abort(401);
+        $request->user() ?? abort(401, 'Unauthenticated');
+
+        Log::info('ROL report called', [
+            'user_id' => $request->user()->id,
+            'role' => $request->user()->role
+        ]);
+
+        // Get user IDs based on dashboard scope
+        $userIds = $this->resolveDashboardUserIds($request);
+
+        Log::info('ROL user IDs resolved', [
+            'user_ids' => $userIds,
+            'count' => count($userIds)
+        ]);
 
         [$columns, $rows] = $this->buildRolDataset(
-            uid: $uid,
+            userIds: $userIds,
             filters: [],
             selections: [],
             opts: ['keepHtml' => false]
@@ -37,28 +50,40 @@ class ReportController extends Controller
         ]);
     }
 
-
     /**
-     * Literature list for the page (owner-scoped)
+     * Literature list for the page (accessible users scoped)
      */
     public function literature(Request $request)
     {
-        $uid = $request->user()->id ?? abort(401, 'Unauthenticated');
+        $request->user() ?? abort(401, 'Unauthenticated');
 
-        // Latest review per paper for this user
+        Log::info('Literature report called', [
+            'user_id' => $request->user()->id,
+            'role' => $request->user()->role
+        ]);
+
+        // Get user IDs based on dashboard scope
+        $userIds = $this->resolveDashboardUserIds($request);
+
+        Log::info('Literature user IDs resolved', [
+            'user_ids' => $userIds,
+            'count' => count($userIds)
+        ]);
+
+        // Latest review per paper for accessible users
         $latestReviewIds = DB::table('reviews')
             ->selectRaw('MAX(id) as id, paper_id')
-            ->where('user_id', $uid)
+            ->whereIn('user_id', $userIds)
             // ->where('status', 'done') // enable when ready
             ->groupBy('paper_id');
 
         $rows = DB::table('papers')
             ->leftJoinSub($latestReviewIds, 'lr', 'lr.paper_id', '=', 'papers.id')
-            ->leftJoin('reviews as rv', function ($j) use ($uid) {
+            ->leftJoin('reviews as rv', function ($j) use ($userIds) {
                 $j->on('rv.id', '=', 'lr.id')
-                ->where('rv.user_id', '=', $uid);
+                    ->whereIn('rv.user_id', $userIds);
             })
-            ->where('papers.created_by', $uid)
+            ->whereIn('papers.created_by', $userIds)
             ->orderByDesc('papers.id')
             ->select([
                 'papers.id',
@@ -91,9 +116,12 @@ class ReportController extends Controller
             ->filter(fn($r) => !empty($r['review']))
             ->values();
 
+        Log::info('Literature rows retrieved', [
+            'count' => $rows->count()
+        ]);
+
         return response()->json($rows);
     }
-
 
     /* --------------------------- Utilities --------------------------- */
 
@@ -125,10 +153,10 @@ class ReportController extends Controller
         return trim($s);
     }
 
-    /* --------------------------- Builders (owner-scoped) --------------------------- */
+    /* --------------------------- Builders (accessible users scoped) --------------------------- */
 
     /**
-     * Build ROL dataset (columns + rows) from latest DONE review per paper for this user.
+     * Build ROL dataset (columns + rows) from latest DONE review per paper for accessible users.
      */
     private function normalizeReviewSections(array $sections, $sectionDefs): array
     {
@@ -150,9 +178,8 @@ class ReportController extends Controller
         return $normalized;
     }
 
-
     protected function buildRolDataset(
-        int $uid,
+        array $userIds,
         array $filters,
         array $selections,
         array $opts = []
@@ -160,8 +187,8 @@ class ReportController extends Controller
         $keepHtml = (bool)($opts['keepHtml'] ?? false);
 
         /* ---------------------------------
-     * 1. Load section definitions (DB)
-     * --------------------------------- */
+         * 1. Load section definitions (DB)
+         * --------------------------------- */
         $sectionDefs = \App\Models\ReviewSectionKey::query()
             ->where('active', 1)
             ->orderBy('order')
@@ -172,8 +199,8 @@ class ReportController extends Controller
         }
 
         /* ---------------------------------
-     * 2. Base paper columns
-     * --------------------------------- */
+         * 2. Base paper columns
+         * --------------------------------- */
         $baseCols = [
             'Paper ID'      => 'id',
             'Title'         => 'title',
@@ -191,14 +218,13 @@ class ReportController extends Controller
             'Area / Sub Area' => 'area',
         ];
 
-
         if (Schema::hasColumn('papers', 'category')) {
             $baseCols['Category'] = 'category';
         }
 
         /* ---------------------------------
-     * 3. Build column metadata
-     * --------------------------------- */
+         * 3. Build column metadata
+         * --------------------------------- */
         $columns = [];
 
         foreach ($baseCols as $label => $col) {
@@ -216,21 +242,21 @@ class ReportController extends Controller
         }
 
         /* ---------------------------------
-     * 4. Latest DONE review per paper
-     * --------------------------------- */
+         * 4. Latest DONE review per paper
+         * --------------------------------- */
         $latestDoneIds = DB::table('reviews')
             ->selectRaw('MAX(id) AS id, paper_id')
-            ->where('user_id', $uid)
+            ->whereIn('user_id', $userIds)
             // ->where('status', 'done')
             ->groupBy('paper_id');
 
         $query = DB::table('papers')
             ->leftJoinSub($latestDoneIds, 'lr', 'lr.paper_id', '=', 'papers.id')
-            ->leftJoin('reviews as rv', function ($j) use ($uid) {
+            ->leftJoin('reviews as rv', function ($j) use ($userIds) {
                 $j->on('rv.id', '=', 'lr.id')
-                    ->where('rv.user_id', '=', $uid);
+                    ->whereIn('rv.user_id', $userIds);
             })
-            ->where('papers.created_by', $uid)
+            ->whereIn('papers.created_by', $userIds)
             ->select([
                 'papers.*',
                 'rv.review_sections',
@@ -242,8 +268,8 @@ class ReportController extends Controller
         }
 
         /* ---------------------------------
-     * 5. Build rows
-     * --------------------------------- */
+         * 5. Build rows
+         * --------------------------------- */
 
         $rows = [];
 
@@ -266,7 +292,7 @@ class ReportController extends Controller
 
             $hasReview = false;
 
-            // Assign section values (THIS WAS MISSING)
+            // Assign section values
             foreach ($sectionDefs as $sec) {
                 $value = $sections[$sec->key] ?? null;
 
@@ -285,25 +311,30 @@ class ReportController extends Controller
             $rows[] = $row;
         }
 
+        Log::info('ROL dataset built', [
+            'column_count' => count($columns),
+            'row_count' => count($rows)
+        ]);
+
         return [$columns, $rows];
     }
 
-
     /**
-     * Build SYNOPSIS-like dataset for this user.
+     * Build SYNOPSIS-like dataset for accessible users.
      */
-    protected function buildSynopsisDataset(int $uid, array $filters, array $selections): array
+    protected function buildSynopsisDataset(array $userIds, array $filters, array $selections): array
     {
         $latestDoneIds = DB::table('reviews')
             ->selectRaw('MAX(id) AS id, paper_id')
-            ->where('user_id', $uid)
+            ->whereIn('user_id', $userIds)
             // ->where('status', 'done')
             ->groupBy('paper_id');
 
         $q = DB::table('papers')
             ->leftJoinSub($latestDoneIds, 'lr', 'lr.paper_id', '=', 'papers.id')
-            ->leftJoin('reviews as rv', function ($j) use ($uid) {
-                $j->on('rv.id', '=', 'lr.id')->where('rv.user_id', '=', $uid);
+            ->leftJoin('reviews as rv', function ($j) use ($userIds) {
+                $j->on('rv.id', '=', 'lr.id')
+                    ->whereIn('rv.user_id', $userIds);
             })
             ->select([
                 'papers.id as paper_id',
@@ -312,7 +343,7 @@ class ReportController extends Controller
                 'papers.year',
                 'rv.review_sections',
             ])
-            ->where('papers.created_by', $uid)
+            ->whereIn('papers.created_by', $userIds)
             ->orderByDesc('papers.id');
 
         if ($years = Arr::get($filters, 'years', [])) $q->whereIn('papers.year', $years);
@@ -325,7 +356,7 @@ class ReportController extends Controller
                     ? (json_decode($rec->review_sections, true) ?: [])
                     : (array)$rec->review_sections;
             }
-            $lit = Arr::get($sections, 'Literature Review');
+
             $lit =
                 $sections['literature_review']
                 ?? $sections['Litracture Review']
@@ -338,22 +369,19 @@ class ReportController extends Controller
                     'title'    => $rec->title,
                     'authors'  => $rec->authors,
                     'year'     => $rec->year,
-                    // IMPORTANT: keep HTML
                     'html'     => $lit,
-                    // optional plain text (for fallback)
                     'text'     => $this->cleanText($lit),
                 ];
             }
-
         }
 
-        // chapters selection (owner-scoped)
+        // chapters selection (accessible users scoped)
         $chapterIds = array_values(array_filter((array) Arr::get($selections, 'chapters', [])));
         $chapters = [];
         if (!empty($chapterIds)) {
             $rows = DB::table('chapters')
                 ->select(['id', 'title', 'body_html'])
-                ->where('user_id', $uid)
+                ->whereIn('user_id', $userIds)
                 ->whereIn('id', $chapterIds)
                 ->orderByRaw("FIELD(id," . implode(',', array_map('intval', $chapterIds)) . ")")
                 ->get();
@@ -374,7 +402,20 @@ class ReportController extends Controller
 
     public function preview(Request $request)
     {
-        $uid = $request->user()->id ?? abort(401, 'Unauthenticated');
+        $request->user() ?? abort(401, 'Unauthenticated');
+
+        Log::info('Report preview called', [
+            'user_id' => $request->user()->id,
+            'role' => $request->user()->role
+        ]);
+
+        // Get user IDs based on dashboard scope
+        $userIds = $this->resolveDashboardUserIds($request);
+
+        Log::info('Preview user IDs resolved', [
+            'user_ids' => $userIds,
+            'count' => count($userIds)
+        ]);
 
         $payload = $request->validate([
             'name'       => 'nullable|string|max:255',
@@ -399,18 +440,20 @@ class ReportController extends Controller
         $hasROL       = !!array_filter($include, fn($v) => (bool)$v === true);
         $hasChapters  = count($chaptersSel) > 0;
 
+        $totalPapers = Paper::whereIn('created_by', $userIds)->count();
+
         $resp = [
             'name'     => $name,
             'template' => $template,
             'meta'     => [
-                'totalPapers'      => (int) Paper::where('created_by', $uid)->count(),
+                'totalPapers'      => (int) $totalPapers,
                 'selectedSections' => [],
                 'chapterCount'     => (int) count($chaptersSel),
             ],
         ];
 
         if ($hasROL) {
-            [$columns, $rows] = $this->buildRolDataset($uid, $filters, $selections, $options);
+            [$columns, $rows] = $this->buildRolDataset($userIds, $filters, $selections, $options);
 
             $baseCount = 5 + (Schema::hasColumn('papers', 'category') ? 1 : 0);
             $selectedSectionLabels = array_map(
@@ -424,7 +467,7 @@ class ReportController extends Controller
         }
 
         if ($hasChapters) {
-            $syn = $this->buildSynopsisDataset($uid, $filters, $selections);
+            $syn = $this->buildSynopsisDataset($userIds, $filters, $selections);
             $resp['literature'] = $syn['literature'];
             $resp['chapters']   = $syn['chapters'];
         }
@@ -437,14 +480,28 @@ class ReportController extends Controller
             ];
         }
 
+        Log::info('Report preview generated', [
+            'has_rol' => $hasROL,
+            'has_chapters' => $hasChapters,
+            'total_papers' => $totalPapers
+        ]);
+
         return response()->json($resp);
     }
 
-    /* --------------------------- Generate (owner-scoped stub) --------------------------- */
+    /* --------------------------- Generate (accessible users scoped) --------------------------- */
 
     public function generate(Request $request)
     {
-        $uid = $request->user()->id ?? abort(401, 'Unauthenticated');
+        $request->user() ?? abort(401, 'Unauthenticated');
+
+        Log::info('Report generate called', [
+            'user_id' => $request->user()->id,
+            'role' => $request->user()->role
+        ]);
+
+        // Get user IDs based on dashboard scope
+        $userIds = $this->resolveDashboardUserIds($request);
 
         $payload = $request->validate([
             'template'   => 'nullable|string',
@@ -463,14 +520,22 @@ class ReportController extends Controller
         Storage::disk($disk)->makeDirectory($dir);
         $path = "{$dir}/{$filename}";
 
-        // Store a small summary (still owner-scoped content on client side)
+        // Store a summary with accessible users scope
         $summary = [
             'format'      => $format,
             'selections'  => $payload['selections'],
             'generatedAt' => now()->toDateTimeString(),
-            'userId'      => $uid,
+            'userId'      => $request->user()->id,
+            'userIds'     => $userIds,
+            'scope'       => $request->query('scope', 'self'),
         ];
         Storage::disk($disk)->put($path, json_encode($summary, JSON_PRETTY_PRINT));
+
+        Log::info('Report generated', [
+            'format' => $format,
+            'filename' => $filename,
+            'user_count' => count($userIds)
+        ]);
 
         return response()->json([
             'disk'        => $disk,
@@ -479,11 +544,19 @@ class ReportController extends Controller
         ]);
     }
 
-    /* --------------------------- Bulk export (owner-scoped stub) --------------------------- */
+    /* --------------------------- Bulk export (accessible users scoped) --------------------------- */
 
     public function bulkExport(Request $request)
     {
-        $uid = $request->user()->id ?? abort(401, 'Unauthenticated');
+        $request->user() ?? abort(401, 'Unauthenticated');
+
+        Log::info('Bulk export called', [
+            'user_id' => $request->user()->id,
+            'role' => $request->user()->role
+        ]);
+
+        // Get user IDs based on dashboard scope
+        $userIds = $this->resolveDashboardUserIds($request);
 
         $payload = $request->validate([
             'type'    => 'required|string|in:all-users,all-papers,by-collection',
@@ -491,17 +564,24 @@ class ReportController extends Controller
             'filters' => 'array',
         ]);
 
-        // Even if client says "all-users", we only export THIS user's scope here.
         $disk = 'public';
         $dir  = 'reports/' . now()->format('Y/m');
         Storage::disk($disk)->makeDirectory($dir);
         $path = "{$dir}/bulk_export_" . now()->timestamp . ".txt";
 
         $payloadToSave = $payload;
-        $payloadToSave['effective_scope'] = 'current-user';
-        $payloadToSave['user_id'] = $uid;
+        $payloadToSave['effective_scope'] = 'dashboard-scope';
+        $payloadToSave['user_id'] = $request->user()->id;
+        $payloadToSave['user_ids'] = $userIds;
+        $payloadToSave['scope'] = $request->query('scope', 'self');
 
         Storage::disk($disk)->put($path, json_encode($payloadToSave, JSON_PRETTY_PRINT));
+
+        Log::info('Bulk export generated', [
+            'type' => $payload['type'],
+            'format' => $payload['format'],
+            'user_count' => count($userIds)
+        ]);
 
         return response()->json([
             'disk'        => $disk,

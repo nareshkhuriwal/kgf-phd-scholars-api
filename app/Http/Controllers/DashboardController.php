@@ -5,15 +5,17 @@ namespace App\Http\Controllers;
 
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 use Carbon\Carbon;
 use Carbon\CarbonPeriod;
 use App\Http\Controllers\Concerns\OwnerAuthorizes;
 use App\Support\ResolvesDashboardScope;
+use App\Support\ResolvesApiScope;
 use App\Models\User;
 
 class DashboardController extends Controller
 {
-    use OwnerAuthorizes, ResolvesDashboardScope;
+    use OwnerAuthorizes, ResolvesDashboardScope, ResolvesApiScope;
 
     /**
      * KPIs + weekly series (last N ISO weeks).
@@ -23,11 +25,19 @@ class DashboardController extends Controller
     {
         $req->user() ?? abort(401, 'Unauthenticated');
 
+        Log::info('Dashboard summary called', [
+            'user_id' => $req->user()->id,
+            'role' => $req->user()->role,
+            'scope' => $req->query('scope', 'self')
+        ]);
+
         // resolve which user IDs to aggregate over
         $userIds = $this->resolveDashboardUserIds($req);
-        // if (!in_array($req->user()->id, $userIds, true)) {
-        //     array_unshift($userIds, $req->user()->id); // add at front
-        // }
+
+        Log::info('Dashboard user IDs resolved', [
+            'user_ids' => $userIds,
+            'count' => count($userIds)
+        ]);
 
         if (empty($userIds)) {
             return response()->json([
@@ -73,6 +83,12 @@ class DashboardController extends Controller
         $weeksBack = (int) $req->query('weeks', 8);
         [$labels, $added, $reviewedW] = $this->weeklyAddedVsReviewed($userIds, $weeksBack);
 
+        Log::info('Dashboard summary generated', [
+            'total_papers' => $totalPapers,
+            'reviewed' => $reviewed,
+            'collections' => $collections
+        ]);
+
         return response()->json([
             'data' => [
                 'totals' => [
@@ -102,7 +118,13 @@ class DashboardController extends Controller
     {
         $req->user() ?? abort(401, 'Unauthenticated');
 
+        Log::info('Dashboard daily series called', [
+            'user_id' => $req->user()->id,
+            'days' => $req->integer('days', 30)
+        ]);
+
         $userIds = $this->resolveDashboardUserIds($req);
+
         if (empty($userIds)) {
             return response()->json([
                 'data' => [
@@ -123,6 +145,11 @@ class DashboardController extends Controller
         [$_,      $reviewed] = $this->dailyCount($userIds, 'reviews', 'updated_at', $from, $to, 'user_id', ['status' => 'done']);
         [$__,     $started]  = $this->dailyCount($userIds, 'reviews', 'created_at', $from, $to, 'user_id', ['status' => ['!=', 'done']]);
 
+        Log::info('Daily series generated', [
+            'days' => $days,
+            'data_points' => count($labels)
+        ]);
+
         return response()->json([
             'data' => compact('labels', 'added', 'reviewed', 'started')
         ]);
@@ -137,7 +164,13 @@ class DashboardController extends Controller
     {
         $req->user() ?? abort(401, 'Unauthenticated');
 
+        Log::info('Dashboard weekly series called', [
+            'user_id' => $req->user()->id,
+            'weeks' => $req->integer('weeks', 12)
+        ]);
+
         $userIds = $this->resolveDashboardUserIds($req);
+
         if (empty($userIds)) {
             return response()->json([
                 'data' => [
@@ -149,111 +182,162 @@ class DashboardController extends Controller
         }
 
         $weeks = max(1, min((int) $req->integer('weeks', 12), 52));
+        $result = $this->weeklyAddedVsReviewed($userIds, $weeks, true);
+
+        Log::info('Weekly series generated', [
+            'weeks' => $weeks,
+            'data_points' => count($result['labels'])
+        ]);
 
         return response()->json([
-            'data' => $this->weeklyAddedVsReviewed($userIds, $weeks, true)
+            'data' => $result
         ]);
     }
 
-/**
- * Filters endpoint for dashboard dropdowns:
- *  - supervisors
- *  - researchers
- *  - supervisorResearcherMap
- *
- * Rules:
- *  - super_admin: sees ALL supervisors & researchers
- *  - admin: sees ONLY users created by them
- *  - supervisor: sees self + invited researchers
- *  - researcher: sees self + supervisors who invited them
- */
-public function filters(Request $req)
-{
-    $user = $req->user() ?? abort(401, 'Unauthenticated');
-    $role = $user->role;
-    $uid  = $user->id;
+    /**
+     * Filters endpoint for dashboard dropdowns:
+     *  - supervisors
+     *  - researchers
+     *  - supervisorResearcherMap
+     *
+     * Rules:
+     *  - superuser: sees ALL supervisors & researchers
+     *  - admin: sees ONLY their supervisors & researchers under those supervisors
+     *  - supervisor: sees self + invited researchers
+     *  - researcher: sees self + supervisors who invited them
+     */
+    public function filters(Request $req)
+    {
+        $user = $req->user() ?? abort(401, 'Unauthenticated');
+        $role = $user->role;
+        $uid  = $user->id;
 
-    /* ============================================================
-     * SUPERVISORS
-     * ============================================================ */
-    if ($role === 'super_admin') {
-        // Super admin → all supervisors
-        $supervisors = User::where('role', 'supervisor')
-            ->select('id', 'name', 'email')
-            ->orderBy('name')
-            ->get();
+        Log::info('Dashboard filters called', [
+            'user_id' => $uid,
+            'role' => $role
+        ]);
 
-    } elseif ($role === 'admin') {
-        // Admin → only supervisors created by them
-        $supervisors = User::where('role', 'supervisor')
-            ->where('created_by', $uid)
-            ->select('id', 'name', 'email')
-            ->orderBy('name')
-            ->get();
+        /* ============================================================
+         * SUPERVISORS
+         * ============================================================ */
+        if ($role === 'superuser') {
+            // Superuser → all supervisors
+            $supervisors = User::where('role', 'supervisor')
+                ->select('id', 'name', 'email')
+                ->orderBy('name')
+                ->get();
 
-    } elseif ($role === 'supervisor') {
-        // Supervisor → only self
-        $supervisors = User::where('id', $uid)
-            ->select('id', 'name', 'email')
-            ->get();
+            Log::info('Superuser: loaded all supervisors', [
+                'count' => $supervisors->count()
+            ]);
 
-    } else {
-        // Researcher → supervisors who invited them
-        $supervisors = DB::table('researcher_invites')
-            ->join('users', 'users.id', '=', 'researcher_invites.created_by')
-            ->where('researcher_invites.researcher_email', $user->email)
-            ->where('researcher_invites.status', 'accepted')
-            ->select('users.id', 'users.name', 'users.email')
-            ->distinct()
-            ->orderBy('users.name')
-            ->get();
+        } elseif ($role === 'admin') {
+            // Admin → only supervisors created by them
+            $supervisors = User::where('role', 'supervisor')
+                ->where('created_by', $uid)
+                ->select('id', 'name', 'email')
+                ->orderBy('name')
+                ->get();
+
+            Log::info('Admin: loaded their supervisors', [
+                'count' => $supervisors->count()
+            ]);
+
+        } elseif ($role === 'supervisor') {
+            // Supervisor → only self
+            $supervisors = User::where('id', $uid)
+                ->select('id', 'name', 'email')
+                ->get();
+
+        } else {
+            // Researcher → supervisors who invited them
+            $supervisors = DB::table('researcher_invites')
+                ->join('users', 'users.id', '=', 'researcher_invites.created_by')
+                ->where('researcher_invites.researcher_email', $user->email)
+                ->where('researcher_invites.status', 'accepted')
+                ->whereNull('researcher_invites.revoked_at')
+                ->select('users.id', 'users.name', 'users.email')
+                ->distinct()
+                ->orderBy('users.name')
+                ->get();
+        }
+
+        /* ============================================================
+         * RESEARCHERS
+         * ============================================================ */
+        if ($role === 'superuser') {
+            // Superuser → all researchers
+            $researchers = User::where('role', 'researcher')
+                ->select('id', 'name', 'email')
+                ->orderBy('name')
+                ->get();
+
+            Log::info('Superuser: loaded all researchers', [
+                'count' => $researchers->count()
+            ]);
+
+        } elseif ($role === 'admin') {
+            // Admin → researchers under their supervisors
+            $supervisorIds = User::where('role', 'supervisor')
+                ->where('created_by', $uid)
+                ->pluck('id')
+                ->all();
+
+            if (empty($supervisorIds)) {
+                $researchers = collect([]);
+            } else {
+                $researchers = User::query()
+                    ->select('users.id', 'users.name', 'users.email')
+                    ->join('researcher_invites', 'users.email', '=', 'researcher_invites.researcher_email')
+                    ->whereIn('researcher_invites.created_by', $supervisorIds)
+                    ->where('researcher_invites.status', 'accepted')
+                    ->whereNull('researcher_invites.revoked_at')
+                    ->distinct()
+                    ->orderBy('users.name')
+                    ->get();
+            }
+
+            Log::info('Admin: loaded researchers under their supervisors', [
+                'supervisor_count' => count($supervisorIds),
+                'researcher_count' => $researchers->count()
+            ]);
+
+        } elseif ($role === 'supervisor') {
+            // Supervisor → invited researchers
+            $researchers = $this->fetchResearchersForSupervisor($uid);
+
+            Log::info('Supervisor: loaded their researchers', [
+                'count' => $researchers->count()
+            ]);
+
+        } else {
+            // Researcher → only self
+            $researchers = User::where('id', $uid)
+                ->select('id', 'name', 'email')
+                ->get();
+        }
+
+        /* ============================================================
+         * SUPERVISOR → RESEARCHER MAP
+         * (only for visible supervisors)
+         * ============================================================ */
+        $supervisorIds = collect($supervisors)->pluck('id')->all();
+        $map = $this->buildSupervisorResearcherMap($supervisorIds);
+
+        Log::info('Dashboard filters generated', [
+            'supervisor_count' => count($supervisors),
+            'researcher_count' => count($researchers),
+            'map_entries' => count($map)
+        ]);
+
+        return response()->json([
+            'data' => [
+                'supervisors'             => $supervisors,
+                'researchers'             => $researchers,
+                'supervisorResearcherMap' => $map,
+            ],
+        ]);
     }
-
-    /* ============================================================
-     * RESEARCHERS
-     * ============================================================ */
-    if ($role === 'super_admin') {
-        // Super admin → all researchers
-        $researchers = User::where('role', 'researcher')
-            ->select('id', 'name', 'email')
-            ->orderBy('name')
-            ->get();
-
-    } elseif ($role === 'admin') {
-        // Admin → only researchers created by them
-        $researchers = User::where('role', 'researcher')
-            ->where('created_by', $uid)
-            ->select('id', 'name', 'email')
-            ->orderBy('name')
-            ->get();
-
-    } elseif ($role === 'supervisor') {
-        // Supervisor → invited researchers
-        $researchers = $this->fetchResearchersForSupervisor($uid);
-
-    } else {
-        // Researcher → only self
-        $researchers = User::where('id', $uid)
-            ->select('id', 'name', 'email')
-            ->get();
-    }
-
-    /* ============================================================
-     * SUPERVISOR → RESEARCHER MAP
-     * (only for visible supervisors)
-     * ============================================================ */
-    $supervisorIds = collect($supervisors)->pluck('id')->all();
-    $map = $this->buildSupervisorResearcherMap($supervisorIds);
-
-    return response()->json([
-        'data' => [
-            'supervisors'             => $supervisors,
-            'researchers'             => $researchers,
-            'supervisorResearcherMap' => $map,
-        ],
-    ]);
-}
-
 
     /**
      * Optional: dedicated endpoint to fetch researchers for a supervisor
@@ -265,18 +349,53 @@ public function filters(Request $req)
         $current      = $req->user() ?? abort(401, 'Unauthenticated');
         $supervisorId = (int) $req->query('supervisor_id');
 
+        Log::info('Researchers by supervisor called', [
+            'current_user_id' => $current->id,
+            'supervisor_id' => $supervisorId
+        ]);
+
         if (!$supervisorId) {
             return response()->json(['data' => []]);
         }
 
-        // Only admin or that supervisor can query directly
-        if ($current->role !== 'admin' && $current->id !== $supervisorId) {
-            abort(403, 'Not allowed');
+        // Superuser can query any supervisor
+        if ($current->role === 'superuser') {
+            $researchers = $this->fetchResearchersForSupervisor($supervisorId);
+            return response()->json(['data' => $researchers]);
         }
 
-        $researchers = $this->fetchResearchersForSupervisor($supervisorId);
+        // Admin can query their supervisors
+        if ($current->role === 'admin') {
+            $isMySupervisor = User::where('id', $supervisorId)
+                ->where('role', 'supervisor')
+                ->where('created_by', $current->id)
+                ->exists();
 
-        return response()->json(['data' => $researchers]);
+            if (!$isMySupervisor) {
+                Log::warning('Admin attempted to access supervisor they did not create', [
+                    'admin_id' => $current->id,
+                    'supervisor_id' => $supervisorId
+                ]);
+                abort(403, 'Not allowed to access this supervisor');
+            }
+
+            $researchers = $this->fetchResearchersForSupervisor($supervisorId);
+            return response()->json(['data' => $researchers]);
+        }
+
+        // Supervisor can only query themselves
+        if ($current->role === 'supervisor' && $current->id === $supervisorId) {
+            $researchers = $this->fetchResearchersForSupervisor($supervisorId);
+            return response()->json(['data' => $researchers]);
+        }
+
+        Log::warning('Unauthorized access to researcher list', [
+            'current_user_id' => $current->id,
+            'current_role' => $current->role,
+            'requested_supervisor_id' => $supervisorId
+        ]);
+
+        abort(403, 'Not allowed');
     }
 
     // ==================== Helpers ====================
@@ -287,16 +406,18 @@ public function filters(Request $req)
             return 0;
         }
 
-        // If you have a queue table (e.g., review_queue with user_id), switch to:
-        // return (int) DB::table('review_queue')->whereIn('user_id', $userIds)->count();
+        // If you have a queue table (e.g., review_queue with user_id), use:
+        return (int) DB::table('review_queue')
+            ->whereIn('user_id', $userIds)
+            ->count();
 
         // Fallback inference: papers with no finished/started review
-        $inReviews = DB::table('reviews')
-            ->whereIn('user_id', $userIds)
-            ->distinct('paper_id')
-            ->count('paper_id');
+        // $inReviews = DB::table('reviews')
+        //     ->whereIn('user_id', $userIds)
+        //     ->distinct('paper_id')
+        //     ->count('paper_id');
 
-        return max($totalPapers - $inReviews, 0);
+        // return max($totalPapers - $inReviews, 0);
     }
 
     /**
@@ -434,6 +555,7 @@ public function filters(Request $req)
             ->join('researcher_invites', 'users.email', '=', 'researcher_invites.researcher_email')
             ->where('researcher_invites.created_by', $supervisorId)
             ->where('researcher_invites.status', 'accepted')
+            ->whereNull('researcher_invites.revoked_at')
             ->orderBy('users.name')
             ->get();
     }
@@ -451,6 +573,7 @@ public function filters(Request $req)
             ->join('users', 'users.email', '=', 'researcher_invites.researcher_email')
             ->whereIn('researcher_invites.created_by', $supervisorIds)
             ->where('researcher_invites.status', 'accepted')
+            ->whereNull('researcher_invites.revoked_at')
             ->select('researcher_invites.created_by as supervisor_id', 'users.id as researcher_id')
             ->get();
 
