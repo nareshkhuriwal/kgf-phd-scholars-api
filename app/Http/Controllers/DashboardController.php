@@ -198,10 +198,11 @@ class DashboardController extends Controller
      * Filters endpoint for dashboard dropdowns:
      *  - supervisors
      *  - researchers
+     *  - admins (superuser only)
      *  - supervisorResearcherMap
      *
      * Rules:
-     *  - superuser: sees ALL supervisors & researchers
+     *  - superuser: sees ALL supervisors, researchers & admins
      *  - admin: sees ONLY their supervisors & researchers under those supervisors
      *  - supervisor: sees self + invited researchers
      *  - researcher: sees self + supervisors who invited them
@@ -216,6 +217,24 @@ class DashboardController extends Controller
             'user_id' => $uid,
             'role' => $role
         ]);
+
+        /* ============================================================
+         * ADMINS (superuser only)
+         * ============================================================ */
+        if ($role === 'superuser') {
+            // Superuser → all admins
+            $admins = User::where('role', 'admin')
+                ->select('id', 'name', 'email')
+                ->orderBy('name')
+                ->get();
+
+            Log::info('Superuser: loaded all admins', [
+                'count' => $admins->count()
+            ]);
+        } else {
+            // Other roles don't see admins list
+            $admins = collect([]);
+        }
 
         /* ============================================================
          * SUPERVISORS
@@ -325,6 +344,7 @@ class DashboardController extends Controller
         $map = $this->buildSupervisorResearcherMap($supervisorIds);
 
         Log::info('Dashboard filters generated', [
+            'admin_count' => count($admins),
             'supervisor_count' => count($supervisors),
             'researcher_count' => count($researchers),
             'map_entries' => count($map)
@@ -332,6 +352,7 @@ class DashboardController extends Controller
 
         return response()->json([
             'data' => [
+                'admins'                  => $admins,
                 'supervisors'             => $supervisors,
                 'researchers'             => $researchers,
                 'supervisorResearcherMap' => $map,

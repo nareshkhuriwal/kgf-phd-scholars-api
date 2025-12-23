@@ -80,7 +80,7 @@ class SavedReportRequest extends FormRequest
             'filters.areas'   => 'nullable|array',
             'filters.years'   => 'nullable|array',
             'filters.venues'  => 'nullable|array',
-            'filters.userIds' => 'nullable|array',
+            'filters.userId' => 'nullable|integer',
 
             'selections'               => 'required|array',
             'selections.include'       => 'required|array',

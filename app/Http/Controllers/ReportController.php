@@ -3,6 +3,7 @@
 namespace App\Http\Controllers;
 
 use App\Models\Paper;
+use App\Models\User;
 use Illuminate\Http\Request;
 use Illuminate\Support\Arr;
 use Illuminate\Support\Facades\DB;
@@ -15,6 +16,79 @@ use App\Support\ResolvesDashboardScope;
 class ReportController extends Controller
 {
     use ResolvesApiScope, ResolvesDashboardScope;
+
+    /**
+     * Validate that current user can generate reports for target user
+     */
+    private function validateReportAccess($currentUser, $targetUserId)
+    {
+        $role = $currentUser->role;
+        $currentUserId = $currentUser->id;
+
+        // User can always generate reports for themselves
+        if ($currentUserId == $targetUserId) {
+            return;
+        }
+
+        // Superuser can generate reports for anyone
+        if ($role === 'superuser') {
+            return;
+        }
+
+        // Admin can generate reports for their supervisors and researchers
+        if ($role === 'admin') {
+            // Check if target is supervisor created by this admin
+            $isMySupervisor = User::where('id', $targetUserId)
+                ->where('role', 'supervisor')
+                ->where('created_by', $currentUserId)
+                ->exists();
+
+            if ($isMySupervisor) {
+                return;
+            }
+
+            // Check if target is researcher under admin's supervisors
+            $supervisorIds = User::where('role', 'supervisor')
+                ->where('created_by', $currentUserId)
+                ->pluck('id');
+
+            if ($supervisorIds->isNotEmpty()) {
+                $isMyResearcher = User::where('users.id', $targetUserId)
+                    ->where('users.role', 'researcher')
+                    ->join('researcher_invites', 'users.email', '=', 'researcher_invites.researcher_email')
+                    ->whereIn('researcher_invites.created_by', $supervisorIds)
+                    ->where('researcher_invites.status', 'accepted')
+                    ->whereNull('researcher_invites.revoked_at')
+                    ->exists();
+
+                if ($isMyResearcher) {
+                    return;
+                }
+            }
+
+            abort(403, 'You do not have access to generate reports for this user');
+        }
+
+        // Supervisor can generate reports for their researchers
+        if ($role === 'supervisor') {
+            $isMyResearcher = User::where('users.id', $targetUserId)
+                ->where('users.role', 'researcher')
+                ->join('researcher_invites', 'users.email', '=', 'researcher_invites.researcher_email')
+                ->where('researcher_invites.created_by', $currentUserId)
+                ->where('researcher_invites.status', 'accepted')
+                ->whereNull('researcher_invites.revoked_at')
+                ->exists();
+
+            if ($isMyResearcher) {
+                return;
+            }
+
+            abort(403, 'You do not have access to generate reports for this user');
+        }
+
+        // Researcher can only generate reports for themselves
+        abort(403, 'You can only generate reports for yourself');
+    }
 
     /**
      * Quick JSON for ROL page (accessible users scoped)
@@ -153,10 +227,10 @@ class ReportController extends Controller
         return trim($s);
     }
 
-    /* --------------------------- Builders (accessible users scoped) --------------------------- */
+    /* --------------------------- Builders (specific user scoped) --------------------------- */
 
     /**
-     * Build ROL dataset (columns + rows) from latest DONE review per paper for accessible users.
+     * Build ROL dataset (columns + rows) from latest DONE review per paper for specific user.
      */
     private function normalizeReviewSections(array $sections, $sectionDefs): array
     {
@@ -320,7 +394,7 @@ class ReportController extends Controller
     }
 
     /**
-     * Build SYNOPSIS-like dataset for accessible users.
+     * Build SYNOPSIS-like dataset for specific user.
      */
     protected function buildSynopsisDataset(array $userIds, array $filters, array $selections): array
     {
@@ -375,7 +449,7 @@ class ReportController extends Controller
             }
         }
 
-        // chapters selection (accessible users scoped)
+        // chapters selection (specific user scoped)
         $chapterIds = array_values(array_filter((array) Arr::get($selections, 'chapters', [])));
         $chapters = [];
         if (!empty($chapterIds)) {
@@ -409,19 +483,15 @@ class ReportController extends Controller
             'role' => $request->user()->role
         ]);
 
-        // Get user IDs based on dashboard scope
-        $userIds = $this->resolveDashboardUserIds($request);
-
-        Log::info('Preview user IDs resolved', [
-            'user_ids' => $userIds,
-            'count' => count($userIds)
-        ]);
-
         $payload = $request->validate([
             'name'       => 'nullable|string|max:255',
             'template'   => 'nullable|string',
             'format'     => 'nullable|string',
             'filters'    => 'required|array',
+            'filters.userId' => 'nullable|integer', // The user the report is FOR
+            'filters.areas' => 'nullable|array',
+            'filters.years' => 'nullable|array',
+            'filters.venues' => 'nullable|array',
             'selections' => 'required|array',
             'options'    => 'sometimes|array',
             'options.keepHtml' => 'sometimes|boolean',
@@ -432,6 +502,26 @@ class ReportController extends Controller
         $filters    = $payload['filters'];
         $selections = $payload['selections'];
         $options    = Arr::get($payload, 'options', []);
+
+        // Get userId from filters - this is the user the report is FOR
+        $targetUserId = $filters['userId'] ?? null;
+        
+        // If no userId specified, use current user's ID (for researchers)
+        if (!$targetUserId) {
+            $targetUserId = $request->user()->id;
+        }
+
+        // Validate access: ensure current user can generate reports for target user
+        $this->validateReportAccess($request->user(), $targetUserId);
+
+        // Use only the target user's data
+        $userIds = [(int) $targetUserId];
+
+        Log::info('Preview using target user', [
+            'current_user_id' => $request->user()->id,
+            'target_user_id' => $targetUserId,
+            'user_ids' => $userIds
+        ]);
 
         $include      = Arr::get($selections, 'include', []);
         $includeOrder = Arr::get($selections, 'includeOrder', []);
@@ -449,6 +539,7 @@ class ReportController extends Controller
                 'totalPapers'      => (int) $totalPapers,
                 'selectedSections' => [],
                 'chapterCount'     => (int) count($chaptersSel),
+                'targetUserId'     => $targetUserId,
             ],
         ];
 
@@ -483,13 +574,14 @@ class ReportController extends Controller
         Log::info('Report preview generated', [
             'has_rol' => $hasROL,
             'has_chapters' => $hasChapters,
-            'total_papers' => $totalPapers
+            'total_papers' => $totalPapers,
+            'target_user_id' => $targetUserId
         ]);
 
         return response()->json($resp);
     }
 
-    /* --------------------------- Generate (accessible users scoped) --------------------------- */
+    /* --------------------------- Generate (specific user scoped) --------------------------- */
 
     public function generate(Request $request)
     {
@@ -500,17 +592,28 @@ class ReportController extends Controller
             'role' => $request->user()->role
         ]);
 
-        // Get user IDs based on dashboard scope
-        $userIds = $this->resolveDashboardUserIds($request);
-
         $payload = $request->validate([
             'template'   => 'nullable|string',
             'format'     => 'required|string|in:pdf,docx,xlsx,pptx',
             'filename'   => 'nullable|string|max:255',
             'filters'    => 'required|array',
+            'filters.userId' => 'nullable|integer',
             'selections' => 'required|array',
             'options'    => 'sometimes|array',
         ]);
+
+        // Get userId from filters
+        $targetUserId = $payload['filters']['userId'] ?? null;
+        
+        if (!$targetUserId) {
+            $targetUserId = $request->user()->id;
+        }
+
+        // Validate access
+        $this->validateReportAccess($request->user(), $targetUserId);
+
+        // Use only the target user's data
+        $userIds = [(int) $targetUserId];
 
         $format   = strtolower($payload['format']);
         $filename = preg_replace('/[^A-Za-z0-9._-]+/', '_', $payload['filename'] ?? 'report') . ".{$format}";
@@ -520,21 +623,22 @@ class ReportController extends Controller
         Storage::disk($disk)->makeDirectory($dir);
         $path = "{$dir}/{$filename}";
 
-        // Store a summary with accessible users scope
+        // Store a summary with target user info
         $summary = [
-            'format'      => $format,
-            'selections'  => $payload['selections'],
-            'generatedAt' => now()->toDateTimeString(),
-            'userId'      => $request->user()->id,
-            'userIds'     => $userIds,
-            'scope'       => $request->query('scope', 'self'),
+            'format'          => $format,
+            'selections'      => $payload['selections'],
+            'filters'         => $payload['filters'],
+            'generatedAt'     => now()->toDateTimeString(),
+            'generatedBy'     => $request->user()->id,
+            'targetUserId'    => $targetUserId,
         ];
         Storage::disk($disk)->put($path, json_encode($summary, JSON_PRETTY_PRINT));
 
         Log::info('Report generated', [
             'format' => $format,
             'filename' => $filename,
-            'user_count' => count($userIds)
+            'generated_by' => $request->user()->id,
+            'target_user_id' => $targetUserId
         ]);
 
         return response()->json([
