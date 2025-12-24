@@ -35,17 +35,22 @@ class ReviewQueueController extends Controller
 
         // Query review queue for all accessible users
         $rows = ReviewQueue::with([
-                'paper' => fn ($q) => $q->whereIn('created_by', $userIds)->with('creator:id,name,email,role'),
+                'paper' => fn ($q) => $q
+                    ->whereIn('created_by', $userIds)
+                    ->with('creator:id,name,email,role'),
                 'paper.reviews' => function ($q) use ($userIds) {
                     $q->whereIn('user_id', $userIds);
                 }
             ])
             ->whereIn('user_id', $userIds)
             ->whereHas('paper', fn ($q) => $q->whereIn('created_by', $userIds))
-            ->orderByDesc('added_at')
             ->get()
             ->map(fn ($rq) => $rq->paper)
-            ->filter(); // Remove null papers
+            ->filter()
+            ->sortByDesc('updated_at') // ✅ THIS FIXES IT
+            ->values();
+
+
 
         Log::info('ReviewQueue rows retrieved', [
             'count' => $rows->count()
