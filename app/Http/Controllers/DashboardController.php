@@ -104,7 +104,7 @@ class DashboardController extends Controller
                     'reviewed' => $reviewedW,
                 ],
                 // optional: category distribution if you keep a category field on papers
-                // 'byCategory' => $this->byCategoryForUsers($userIds),
+                'byCreatedBy' => $this->byCategoryForPaperCategory($userIds),
             ]
         ]);
     }
@@ -512,6 +512,16 @@ class DashboardController extends Controller
             ->pluck('c', 'yw')
             ->all();
 
+        $startedRows = DB::table('reviews')
+            ->selectRaw("YEARWEEK(created_at, 3) as yw, COUNT(*) as c")
+            ->whereIn('user_id', $userIds)
+            ->where('status', 'in_progress')
+            ->whereBetween('created_at', [$start, $end])
+            ->groupBy('yw')
+            ->pluck('c', 'yw')
+            ->all();
+
+
         // reviews completed per ISO week (use updated_at when status flips to 'done')
         $revRows = DB::table('reviews')
             ->selectRaw("YEARWEEK(updated_at, 3) as yw, COUNT(*) as c")
@@ -537,12 +547,14 @@ class DashboardController extends Controller
             $ywKey   = (int) ($isoY . $isoW);
             $added[]  = (int) ($addedRows[$ywKey] ?? 0);
             $review[] = (int) ($revRows[$ywKey] ?? 0);
+            $started[] = (int) ($startedRows[$ywKey] ?? 0);
+
 
             $cursor->addWeek();
         }
 
         return $asAssoc
-            ? ['labels' => $labels, 'added' => $added, 'reviewed' => $review]
+            ? ['labels' => $labels, 'added' => $added, 'reviewed' => $review, 'started' => $started]
             : [$labels, $added, $review];
     }
 
@@ -607,4 +619,55 @@ class DashboardController extends Controller
 
         return $map;
     }
+
+
+    /**
+ * Distribution of papers by creator (user).
+ * Returns [{ name, value }]
+ */
+private function byCreatedByForUsers(array $userIds): array
+{
+    if (empty($userIds)) {
+        return [];
+    }
+
+    $rows = DB::table('papers')
+        ->join('users', 'users.id', '=', 'papers.created_by')
+        ->whereIn('papers.created_by', $userIds)
+        ->selectRaw('users.id as user_id, COUNT(*) as value')
+        ->groupBy('users.id')
+        ->orderByDesc('value')
+        ->limit(10)
+        ->get();
+
+    // Map ID → display name safely in PHP
+    return $rows->map(function ($row) {
+        $user = User::find($row->user_id);
+        return [
+            'name'  => $user?->name ?: $user?->email ?: "User #{$row->user_id}",
+            'value' => (int) $row->value,
+        ];
+    })->values()->toArray();
+}
+
+
+
+private function byCategoryForPaperCategory(array $userIds): array
+{
+    if (empty($userIds)) {
+        return [];
+    }
+
+    $rows = DB::table('papers')
+        ->selectRaw('COALESCE(category, "Uncategorized") as name, COUNT(*) as value')
+        ->whereIn('created_by', $userIds)
+        ->groupBy('name')
+        ->orderByDesc('value')
+        ->limit(10)
+        ->get();
+
+    return $rows->toArray();
+}
+
+
 }
