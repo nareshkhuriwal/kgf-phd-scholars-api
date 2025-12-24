@@ -568,7 +568,7 @@ class DashboardController extends Controller
         }
 
         $rows = DB::table('papers')
-            ->selectRaw('COALESCE(category,"Uncategorized") as name, COUNT(*) as value')
+            ->selectRaw('COALESCE(publisher,"Uncategorized") as name, COUNT(*) as value')
             ->whereIn('created_by', $userIds)
             ->groupBy('name')
             ->orderByDesc('value')
