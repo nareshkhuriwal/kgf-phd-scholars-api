@@ -399,7 +399,7 @@ class ReportController extends Controller
     protected function buildSynopsisDataset(array $userIds, array $filters, array $selections): array
     {
         $latestDoneIds = DB::table('reviews')
-            ->selectRaw('id, paper_id')
+            ->selectRaw('MAX(id) AS id, paper_id')
             ->whereIn('user_id', $userIds)
             ->where('status', 'done')
             ->groupBy('paper_id');
