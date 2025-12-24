@@ -28,7 +28,7 @@ use App\Http\Controllers\MonitoringController;
 use App\Http\Controllers\TagController;
 use App\Http\Controllers\MyPaperController;
 use App\Http\Controllers\AuthoredPaperSectionController;
-
+use App\Http\Controllers\PaperExtractController;
 
 // Public or rate-limited auth endpoints
 Route::post('/auth/login', [AuthController::class, 'login']);
@@ -94,6 +94,8 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('/papers/{paper}', [PaperController::class, 'show']);
     Route::put('/papers/{paper}', [PaperController::class, 'update']);
     Route::delete('/papers/{paper}', [PaperController::class, 'destroy']);
+
+    Route::post('/papers/{paper}/extract-metadata', [PaperExtractController::class, 'extract']);
 
     Route::post('/library/import', [LibraryImportController::class, 'import']);
 
