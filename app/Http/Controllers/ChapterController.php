@@ -43,6 +43,13 @@ class ChapterController extends Controller
             ->withCount('items')
             ->orderBy('order_index');
 
+        $query = Chapter::query()
+            ->whereIn('user_id', $userIds)
+            ->withCount('items')
+            ->with('creator:id,name,email,role') // ✅ ADD THIS
+            ->orderBy('order_index');
+
+
         if ($collectionId = $request->integer('collection_id')) {
             $query->where('collection_id', $collectionId);
         }

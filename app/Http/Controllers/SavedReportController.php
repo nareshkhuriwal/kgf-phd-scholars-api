@@ -32,8 +32,11 @@ class SavedReportController extends Controller
             'count' => count($userIds)
         ]);
 
+
         $q = SavedReport::query()
-            ->whereIn('created_by', $userIds);
+            ->whereIn('created_by', $userIds)
+            ->with('creator:id,name,email,role'); // ✅ ADD THIS
+
             
         if ($s = $req->get('search')) {
             $q->where(function ($w) use ($s) {
