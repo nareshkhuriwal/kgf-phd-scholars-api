@@ -25,4 +25,10 @@ class SavedReport extends Model
         'selections'   => 'array',
         'headerFooter' => 'array',
     ];
+
+    public function creator()
+    {
+        return $this->belongsTo(User::class, 'created_by');
+    }
+
 }
