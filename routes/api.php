@@ -75,6 +75,10 @@ Route::middleware('auth:sanctum')->group(function () {
 
     Route::get('/settings',  [SettingsController::class, 'show']);
     Route::put('/settings',  [SettingsController::class, 'update']);
+    // Citation styles (can use either endpoint)
+    Route::get('/settings/citation-styles', [SettingsController::class, 'citationStyles']);
+
+
 
     Route::post('/papers/{paper}/highlights/apply', [PdfHighlightController::class, 'apply']);
     Route::post('/pdfs/upload', [PdfHighlightController::class, 'store']); // generic
@@ -119,13 +123,7 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::put('/papers/{paper}/comments/{comment}', [PaperCommentController::class, 'update']);
     Route::delete('/papers/{paper}/comments/{comment}', [PaperCommentController::class, 'destroy']);
 
-    Route::get('/citation-types', [CitationTypeController::class, 'index']);
-    Route::get('/citations', [CitationController::class, 'index']);
-    Route::post('/citations', [CitationController::class, 'store']);
-    Route::post('/reviews/{id}/citations/sync', [ReviewCitationController::class, 'sync']);
-    Route::get('/reviews/{id}/citations', [ReviewCitationController::class, 'list']);
-    Route::get('/reviews/{id}/citations/ieee', [CitationRenderController::class, 'ieee']);
-
+    
 
     Route::get('/my-papers', [MyPaperController::class, 'index']);
     Route::post('/my-papers', [MyPaperController::class, 'store']);
@@ -195,6 +193,30 @@ Route::middleware('auth:sanctum')->group(function () {
 
     Route::get('/monitoring/payments', [PaymentController::class, 'index']);
     Route::get('/monitoring/payments/{payment}', [PaymentController::class, 'show']);
+
+    // Specific format routes (most specific first)
+    Route::get('/reviews/{paperId}/citations/ieee', [CitationRenderController::class, 'ieee']);
+    Route::get('/reviews/{paperId}/citations/apa', [CitationRenderController::class, 'apa']);
+    Route::get('/reviews/{paperId}/citations/mla', [CitationRenderController::class, 'mla']);
+    Route::get('/reviews/{paperId}/citations/chicago', [CitationRenderController::class, 'chicago']);
+    Route::get('/reviews/{paperId}/citations/harvard', [CitationRenderController::class, 'harvard']);
+    Route::get('/reviews/{paperId}/citations/vancouver', [CitationRenderController::class, 'vancouver']);
+    Route::get('/reviews/{paperId}/citations/acm', [CitationRenderController::class, 'acm']);
+    Route::get('/reviews/{paperId}/citations/springer', [CitationRenderController::class, 'springer']);
+    
+    // Dynamic route with query parameter
+    Route::get('/reviews/{paperId}/citations', [CitationRenderController::class, 'index']);
+    
+    // Citation-related routes
+    Route::get('/citation-types', [CitationTypeController::class, 'index']);
+    Route::get('/citations', [CitationController::class, 'index']);
+    Route::post('/citations', [CitationController::class, 'store']);
+    Route::post('/reviews/{id}/citations/sync', [ReviewCitationController::class, 'sync']);
+    Route::get('/reviews/{id}/citations', [ReviewCitationController::class, 'list']); // ⚠️ This might also conflict!
+    
+    // Get available styles
+    Route::get('/citation-styles', [CitationRenderController::class, 'styles']);
+    Route::get('/settings/citation-styles', [SettingsController::class, 'citationStyles']);
 
 
     // ROL exports
