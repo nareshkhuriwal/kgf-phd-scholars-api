@@ -433,7 +433,7 @@ class ReportController extends Controller
 
             $lit =
                 $sections['Literature Review']
-                ?? $sections['Litracture Review']
+                // ?? $sections['Litracture Review']
                 ?? $sections['literature_review']
                 ?? null;
 
