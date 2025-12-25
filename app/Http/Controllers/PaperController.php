@@ -14,6 +14,7 @@ use Illuminate\Support\Facades\Log;
 use Illuminate\Database\QueryException;
 use App\Http\Controllers\Concerns\OwnerAuthorizes;
 use App\Support\ResolvesApiScope;
+use App\Models\Citation; // ✅ Add this import
 
 class PaperController extends Controller
 {
@@ -120,6 +121,9 @@ class PaperController extends Controller
 
             $paper = Paper::create($data);
 
+            // ✅ Automatically create citation from paper
+            $this->createCitationFromPaper($paper);
+
             // If a file came with the create request, attach it now
             if ($req->hasFile('file')) {
                 $this->attachFileToPaper($paper, $req->file('file'), $userId);
@@ -161,6 +165,9 @@ class PaperController extends Controller
             unset($data['file']);
 
             $paper->update($data);
+
+            // ✅ Update or create citation when paper is updated
+            $this->updateOrCreateCitationFromPaper($paper);
 
             if ($req->hasFile('file')) {
                 $this->attachFileToPaper($paper, $req->file('file'), $userId);
@@ -388,6 +395,92 @@ class PaperController extends Controller
         }
     }
 
+    /**
+     * ✅ Create a citation from paper data
+     */
+    private function createCitationFromPaper(Paper $paper): Citation
+    {
+        Log::info('Creating citation from paper', [
+            'paper_id' => $paper->id,
+            'paper_code' => $paper->paper_code
+        ]);
+
+        $citation = Citation::create([
+            'paper_id' => $paper->id,
+            'citation_key' => $paper->paper_code ?: 'PAPER-' . $paper->id,
+            'citation_type_code' => $paper->citation_type_code,
+            'title' => $paper->title,
+            'authors' => $paper->authors,
+            'year' => $paper->year,
+            'journal' => $paper->journal,
+            'volume' => $paper->volume,
+            'issue' => $paper->issue,
+            'pages' => $paper->page_no,
+            'publisher' => $paper->publisher,
+            'doi' => $paper->doi,
+            'isbn' => $paper->issn_isbn,
+            'created_from' => 'paper',
+        ]);
+
+        Log::info('Citation created from paper', [
+            'citation_id' => $citation->id,
+            'citation_key' => $citation->citation_key
+        ]);
+
+        return $citation;
+    }
+
+    /**
+     * ✅ Update existing citation or create new one
+     */
+    private function updateOrCreateCitationFromPaper(Paper $paper): Citation
+    {
+        Log::info('Updating or creating citation from paper', [
+            'paper_id' => $paper->id,
+            'paper_code' => $paper->paper_code
+        ]);
+
+        // Find existing citation by paper_id or citation_key
+        $citation = Citation::where('paper_id', $paper->id)
+            ->orWhere('citation_key', $paper->paper_code)
+            ->first();
+
+        $citationData = [
+            'paper_id' => $paper->id,
+            'citation_key' => $paper->paper_code ?: 'PAPER-' . $paper->id,
+            'citation_type_code' => $paper->citation_type_code,
+            'title' => $paper->title,
+            'authors' => $paper->authors,
+            'year' => $paper->year,
+            'journal' => $paper->journal,
+            'volume' => $paper->volume,
+            'issue' => $paper->issue,
+            'pages' => $paper->page_no,
+            'publisher' => $paper->publisher,
+            'doi' => $paper->doi,
+            'isbn' => $paper->issn_isbn,
+        ];
+
+        if ($citation) {
+            // Update existing citation
+            $citation->update($citationData);
+            Log::info('Citation updated from paper', [
+                'citation_id' => $citation->id,
+                'citation_key' => $citation->citation_key
+            ]);
+        } else {
+            // Create new citation
+            $citationData['created_from'] = 'paper';
+            $citation = Citation::create($citationData);
+            Log::info('New citation created from paper', [
+                'citation_id' => $citation->id,
+                'citation_key' => $citation->citation_key
+            ]);
+        }
+
+        return $citation;
+    }
+    
     /**
      * Save an uploaded file to storage and create the paper_files row.
      */

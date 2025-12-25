@@ -3,11 +3,13 @@
 namespace App\Models;
 
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 
 class Citation extends Model
 {
     protected $fillable = [
+        'paper_id', // ✅ Add this to link to paper
         'citation_key',
         'citation_type_code',
         'title',
@@ -38,6 +40,12 @@ class Citation extends Model
         return $this->belongsTo(CitationType::class, 'citation_type_code', 'code');
     }
 
+
+    // ✅ Add paper relationship
+    public function paper(): BelongsTo
+    {
+        return $this->belongsTo(Paper::class);
+    }
 
     /**
      * Get reviews that use this citation
