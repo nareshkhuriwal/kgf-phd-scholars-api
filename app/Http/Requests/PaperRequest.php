@@ -25,6 +25,7 @@ class PaperRequest extends FormRequest
             'issue'      => ['nullable','string','max:50'],
             'page_no'    => ['nullable','string','max:50'],
             'area'       => ['nullable','string','max:255'],
+            'citation_type_code'     => ['nullable','string','max:255'],
 
             // ROL HTML fields (optional)
             // 'key_issue'  => ['nullable','string'],
