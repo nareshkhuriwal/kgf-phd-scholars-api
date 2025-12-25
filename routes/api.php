@@ -29,6 +29,11 @@ use App\Http\Controllers\TagController;
 use App\Http\Controllers\MyPaperController;
 use App\Http\Controllers\AuthoredPaperSectionController;
 use App\Http\Controllers\PaperExtractController;
+use App\Http\Controllers\CitationController;
+use App\Http\Controllers\CitationTypeController;
+use App\Http\Controllers\ReviewCitationController;
+use App\Http\Controllers\CitationRenderController;
+
 
 // Public or rate-limited auth endpoints
 Route::post('/auth/login', [AuthController::class, 'login']);
@@ -113,6 +118,13 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('/papers/{paper}/comments', [PaperCommentController::class, 'store']);
     Route::put('/papers/{paper}/comments/{comment}', [PaperCommentController::class, 'update']);
     Route::delete('/papers/{paper}/comments/{comment}', [PaperCommentController::class, 'destroy']);
+
+    Route::get('/citation-types', [CitationTypeController::class, 'index']);
+    Route::get('/citations', [CitationController::class, 'index']);
+    Route::post('/citations', [CitationController::class, 'store']);
+    Route::post('/reviews/{id}/citations/sync', [ReviewCitationController::class, 'sync']);
+    Route::get('/reviews/{id}/citations', [ReviewCitationController::class, 'list']);
+    Route::get('/reviews/{id}/citations/ieee', [CitationRenderController::class, 'ieee']);
 
 
     Route::get('/my-papers', [MyPaperController::class, 'index']);

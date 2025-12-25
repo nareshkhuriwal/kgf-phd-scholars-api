@@ -23,6 +23,12 @@ class Review extends Model
         'updated_at'      => 'datetime',
     ];
 
+    public function citations()
+    {
+        return $this->belongsToMany(Citation::class, 'review_citations');
+    }
+
+
     public function paper(): BelongsTo { return $this->belongsTo(Paper::class); }
     public function user(): BelongsTo { return $this->belongsTo(User::class); }
 }
