@@ -3,18 +3,27 @@
 namespace App\Http\Controllers;
 
 use App\Models\UserSetting;
+use App\Services\CitationFormatter;
 use Illuminate\Http\Request;
 
 class SettingsController extends Controller
 {
-    // Allowed sets for validation (keep in sync with UI)
-    private array $styles = [
-        'chicago-note-bibliography-short','ieee','apa-7','mla-9','harvard-with-titles'
-    ];
-    private array $noteFormats = ['markdown+richtext','markdown','html'];
-    private array $languages = ['en-US','en-GB','hi-IN'];
+    // Note formats and languages remain static
+    private array $noteFormats = ['markdown+richtext', 'markdown', 'html'];
+    private array $languages = ['en-US', 'en-GB', 'hi-IN'];
 
-    /** GET /settings */
+    /**
+     * Get allowed citation styles dynamically from CitationFormatter
+     */
+    private function getAllowedCitationStyles(): array
+    {
+        return array_keys(CitationFormatter::getAvailableStyles());
+    }
+
+    /**
+     * GET /settings
+     * Returns user settings with camelCase keys
+     */
     public function show(Request $req)
     {
         $user = $req->user() ?? abort(401, 'Unauthenticated');
@@ -22,7 +31,7 @@ class SettingsController extends Controller
         $settings = UserSetting::firstOrCreate(
             ['user_id' => $user->id],
             [
-                'citation_style'     => 'chicago-note-bibliography-short',
+                'citation_style'     => 'mla', // Default to MLA
                 'note_format'        => 'markdown+richtext',
                 'language'           => 'en-US',
                 'quick_copy_as_html' => false,
@@ -30,24 +39,32 @@ class SettingsController extends Controller
             ]
         );
 
-        return response()->json(['settings' => [
-            'citationStyle'   => $settings->citation_style,
-            'noteFormat'      => $settings->note_format,
-            'language'        => $settings->language,
-            'quickCopyAsHtml' => (bool) $settings->quick_copy_as_html,
-            'includeUrls'     => (bool) $settings->include_urls,
-        ]]);
+        return response()->json([
+            'settings' => [
+                'citationStyle'   => $settings->citation_style,
+                'noteFormat'      => $settings->note_format,
+                'language'        => $settings->language,
+                'quickCopyAsHtml' => (bool) $settings->quick_copy_as_html,
+                'includeUrls'     => (bool) $settings->include_urls,
+            ]
+        ]);
     }
 
-    /** PUT /settings */
+    /**
+     * PUT /settings
+     * Updates user settings with validation
+     */
     public function update(Request $req)
     {
         $user = $req->user() ?? abort(401, 'Unauthenticated');
 
+        // Get allowed citation styles dynamically
+        $allowedStyles = $this->getAllowedCitationStyles();
+
         $data = $req->validate([
-            'citationStyle'   => 'nullable|string|in:'.implode(',', $this->styles),
-            'noteFormat'      => 'nullable|string|in:'.implode(',', $this->noteFormats),
-            'language'        => 'nullable|string|in:'.implode(',', $this->languages),
+            'citationStyle'   => 'nullable|string|in:' . implode(',', $allowedStyles),
+            'noteFormat'      => 'nullable|string|in:' . implode(',', $this->noteFormats),
+            'language'        => 'nullable|string|in:' . implode(',', $this->languages),
             'quickCopyAsHtml' => 'nullable|boolean',
             'includeUrls'     => 'nullable|boolean',
         ]);
@@ -71,12 +88,26 @@ class SettingsController extends Controller
 
         $settings->save();
 
-        return response()->json(['settings' => [
-            'citationStyle'   => $settings->citation_style,
-            'noteFormat'      => $settings->note_format,
-            'language'        => $settings->language,
-            'quickCopyAsHtml' => (bool) $settings->quick_copy_as_html,
-            'includeUrls'     => (bool) $settings->include_urls,
-        ]]);
+        return response()->json([
+            'settings' => [
+                'citationStyle'   => $settings->citation_style,
+                'noteFormat'      => $settings->note_format,
+                'language'        => $settings->language,
+                'quickCopyAsHtml' => (bool) $settings->quick_copy_as_html,
+                'includeUrls'     => (bool) $settings->include_urls,
+            ],
+            'message' => 'Settings saved successfully'
+        ]);
+    }
+
+    /**
+     * GET /settings/citation-styles
+     * Returns available citation styles (optional helper endpoint)
+     */
+    public function citationStyles()
+    {
+        return response()->json([
+            'styles' => CitationFormatter::getAvailableStyles()
+        ]);
     }
 }

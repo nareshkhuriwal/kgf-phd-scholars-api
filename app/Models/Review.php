@@ -4,6 +4,7 @@ namespace App\Models;
 
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 
 class Review extends Model
 {
@@ -23,11 +24,19 @@ class Review extends Model
         'updated_at'      => 'datetime',
     ];
 
-    public function citations()
+/**
+     * Get citations for this review
+     * ✅ Specify the pivot table and foreign keys explicitly
+     */
+    public function citations(): BelongsToMany
     {
-        return $this->belongsToMany(Citation::class, 'review_citations');
+        return $this->belongsToMany(
+            Citation::class,           // Related model
+            'review_citations',        // Pivot table name
+            'review_id',              // Foreign key on pivot table for this model
+            'citation_id'             // Foreign key on pivot table for related model
+        );
     }
-
 
     public function paper(): BelongsTo { return $this->belongsTo(Paper::class); }
     public function user(): BelongsTo { return $this->belongsTo(User::class); }
