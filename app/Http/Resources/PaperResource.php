@@ -31,6 +31,8 @@ class PaperResource extends JsonResource
             'issue'         => $this->issue,
             'page_no'       => $this->page_no,
             'area'          => $this->area,
+            'citation_type_code' => $this->citation_type_code,
+
 
             // optional convenience for the viewer
             'pdf_url' => $primaryUrl,
