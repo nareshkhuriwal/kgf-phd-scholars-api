@@ -58,6 +58,9 @@ class Citation extends Model
             'review_citations',
             'citation_id',
             'review_id'
-        );
+        )
+        ->withPivot(['first_used_order'])
+        ->withTimestamps();
     }
+
 }

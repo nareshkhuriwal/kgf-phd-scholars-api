@@ -31,12 +31,15 @@ class Review extends Model
     public function citations(): BelongsToMany
     {
         return $this->belongsToMany(
-            Citation::class,           // Related model
-            'review_citations',        // Pivot table name
-            'review_id',              // Foreign key on pivot table for this model
-            'citation_id'             // Foreign key on pivot table for related model
-        );
+            Citation::class,
+            'review_citations',
+            'review_id',
+            'citation_id'
+        )
+        ->withPivot(['first_used_order'])
+        ->withTimestamps();
     }
+
 
     public function paper(): BelongsTo { return $this->belongsTo(Paper::class); }
     public function user(): BelongsTo { return $this->belongsTo(User::class); }

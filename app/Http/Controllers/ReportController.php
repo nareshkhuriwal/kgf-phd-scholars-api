@@ -12,6 +12,11 @@ use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Facades\Log;
 use App\Support\ResolvesApiScope;
 use App\Support\ResolvesDashboardScope;
+use App\Services\CitationFormatter;
+use App\Models\Citation;
+use App\Models\UserSetting;
+
+
 
 class ReportController extends Controller
 {
@@ -469,7 +474,57 @@ class ReportController extends Controller
             }
         }
 
-        return ['literature' => $literature, 'chapters' => $chapters];
+        // -------------------------------------------------
+        // BUILD FINAL FORMATTED REFERENCES (THESIS SAFE)
+        // -------------------------------------------------
+
+        // Resolve citation style from user settings (default: MLA)
+        $citationStyle = UserSetting::whereIn('user_id', $userIds)
+            ->value('citation_style') ?? 'mla';
+
+
+        $citationRows = DB::table('review_citations as rc')
+            ->join('citations as c', 'c.id', '=', 'rc.citation_id')
+            ->join('reviews as r', 'r.id', '=', 'rc.review_id')
+            ->whereIn('r.user_id', $userIds)
+            ->whereNotNull('rc.first_used_order')
+            ->orderBy('rc.first_used_order', 'asc')
+            ->select([
+                'rc.first_used_order',
+                'c.id',
+            ])
+            ->distinct()
+            ->get();
+
+        $formattedCitations = [];
+
+        foreach ($citationRows as $row) {
+
+            /** @var Citation $citation */
+            $citation = Citation::find($row->id);
+            if (!$citation) continue;
+
+            $formattedCitations[] = [
+                'order' => $row->first_used_order,
+                'text'  => CitationFormatter::format(
+                    $citation,
+                    $citationStyle,
+                    (int) $row->first_used_order
+                ),
+                'key'   => $citation->citation_key,
+                'style' => $citationStyle
+            ];
+        }
+
+        return [
+            'literature' => $literature,
+            'chapters'   => $chapters,
+            'citations'  => $formattedCitations,
+            'citationStyle' => $citationStyle,
+        ];
+
+
+        // return ['literature' => $literature, 'chapters' => $chapters];
     }
 
     /* --------------------------- Selection-driven PREVIEW --------------------------- */
@@ -505,7 +560,7 @@ class ReportController extends Controller
 
         // Get userId from filters - this is the user the report is FOR
         $targetUserId = $filters['userId'] ?? null;
-        
+
         // If no userId specified, use current user's ID (for researchers)
         if (!$targetUserId) {
             $targetUserId = $request->user()->id;
@@ -561,6 +616,7 @@ class ReportController extends Controller
             $syn = $this->buildSynopsisDataset($userIds, $filters, $selections);
             $resp['literature'] = $syn['literature'];
             $resp['chapters']   = $syn['chapters'];
+            $resp['citations']   = $syn['citations'];
         }
 
         if (!$hasROL && !$hasChapters) {
@@ -604,7 +660,7 @@ class ReportController extends Controller
 
         // Get userId from filters
         $targetUserId = $payload['filters']['userId'] ?? null;
-        
+
         if (!$targetUserId) {
             $targetUserId = $request->user()->id;
         }
