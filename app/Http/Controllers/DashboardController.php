@@ -74,6 +74,7 @@ class DashboardController extends Controller
 
         // If you have a dedicated queue table, use it; otherwise "in queue" = papers with no review row
         $queueCount   = $this->inferQueueCount($userIds, $totalPapers, $reviewed, $started);
+        $inQueue = max($totalPapers - $reviewed - $started, 0);
 
         $collections  = DB::table('collections')
             ->whereIn('user_id', $userIds)
@@ -94,7 +95,7 @@ class DashboardController extends Controller
                 'totals' => [
                     'totalPapers'    => $totalPapers,
                     'reviewedPapers' => $reviewed,
-                    'inQueue'        => $queueCount,
+                    'inQueue'        => $inQueue,
                     'started'        => $started,
                     'collections'    => $collections,
                 ],
