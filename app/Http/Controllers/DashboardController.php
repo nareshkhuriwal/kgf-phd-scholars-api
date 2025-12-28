@@ -80,6 +80,26 @@ class DashboardController extends Controller
             ->whereIn('user_id', $userIds)
             ->count();
 
+        // ----- Year-wise Paper Stats (from papers.year column) -----
+        $yearStatsRaw = DB::table('papers')
+            ->select('year', DB::raw('COUNT(*) as total'))
+            ->whereIn('created_by', $userIds)
+            ->whereNotNull('year')
+            ->whereBetween('year', [1900, now()->year]) // FIX
+            ->groupBy('year')
+            ->orderBy('year')
+            ->get();
+
+
+        $yearLabels = [];
+        $yearCounts = [];
+
+        foreach ($yearStatsRaw as $row) {
+            $yearLabels[] = (string) $row->year;
+            $yearCounts[] = (int) $row->total;
+        }
+
+
         // ----- Weekly (last 8 ISO weeks, Monday start) -----
         $weeksBack = (int) $req->query('weeks', 8);
         [$labels, $added, $reviewedW] = $this->weeklyAddedVsReviewed($userIds, $weeksBack);
@@ -98,6 +118,10 @@ class DashboardController extends Controller
                     'inQueue'        => $inQueue,
                     'started'        => $started,
                     'collections'    => $collections,
+                ],
+                'yearly' => [
+                    'labels' => $yearLabels,
+                    'counts' => $yearCounts,
                 ],
                 'weekly' => [
                     'labels'   => $labels,
