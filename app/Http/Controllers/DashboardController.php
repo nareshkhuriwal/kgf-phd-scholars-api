@@ -90,7 +90,7 @@ class DashboardController extends Controller
             ->whereIn('user_id', $userIds)
             ->count();
 
-            /* =======================
+        /* =======================
          * DERIVED KPIs (NEW)
          * ======================= */
         $reviewCompletionRate = $totalPapers > 0
@@ -164,7 +164,7 @@ class DashboardController extends Controller
                     'started'        => $started,
                     'collections'    => $collections,
                 ],
-               'yearly' => [
+                'yearly' => [
                     'labels'   => $yearLabels,
                     'counts'   => $yearCounts,
                     'percents' => $yearPercents,
@@ -232,7 +232,6 @@ class DashboardController extends Controller
         return response()->json([
             'data' => compact('labels', 'added', 'reviewed', 'started', 'cumulativeReviewed'),
         ]);
-
     }
 
     /**
@@ -329,7 +328,6 @@ class DashboardController extends Controller
             Log::info('Superuser: loaded all supervisors', [
                 'count' => $supervisors->count()
             ]);
-
         } elseif ($role === 'admin') {
             // Admin → only supervisors created by them
             $supervisors = User::where('role', 'supervisor')
@@ -341,13 +339,11 @@ class DashboardController extends Controller
             Log::info('Admin: loaded their supervisors', [
                 'count' => $supervisors->count()
             ]);
-
         } elseif ($role === 'supervisor') {
             // Supervisor → only self
             $supervisors = User::where('id', $uid)
                 ->select('id', 'name', 'email')
                 ->get();
-
         } else {
             // Researcher → supervisors who invited them
             $supervisors = DB::table('researcher_invites')
@@ -374,7 +370,6 @@ class DashboardController extends Controller
             Log::info('Superuser: loaded all researchers', [
                 'count' => $researchers->count()
             ]);
-
         } elseif ($role === 'admin') {
             // Admin → researchers under their supervisors
             $supervisorIds = User::where('role', 'supervisor')
@@ -400,7 +395,6 @@ class DashboardController extends Controller
                 'supervisor_count' => count($supervisorIds),
                 'researcher_count' => $researchers->count()
             ]);
-
         } elseif ($role === 'supervisor') {
             // Supervisor → invited researchers
             $researchers = $this->fetchResearchersForSupervisor($uid);
@@ -408,7 +402,6 @@ class DashboardController extends Controller
             Log::info('Supervisor: loaded their researchers', [
                 'count' => $researchers->count()
             ]);
-
         } else {
             // Researcher → only self
             $researchers = User::where('id', $uid)
@@ -592,23 +585,32 @@ class DashboardController extends Controller
         $end   = Carbon::now()->startOfWeek(Carbon::MONDAY)->endOfWeek(Carbon::SUNDAY);
         $start = (clone $end)->subWeeks($weeksBack - 1)->startOfWeek(Carbon::MONDAY);
 
+        /* -------------------------------
+     * Papers added per ISO week
+     * ------------------------------- */
         $addedRows = DB::table('papers')
             ->selectRaw("YEARWEEK(created_at, 3) as yw, COUNT(*) as c")
             ->whereIn('created_by', $userIds)
-            ->whereBetween('updated_at', [$start, $end])
+            ->whereBetween('created_at', [$start, $end])
             ->groupBy('yw')
             ->pluck('c', 'yw')
             ->all();
 
+        /* -------------------------------
+     * Reviews started per ISO week
+     * ------------------------------- */
         $startedRows = DB::table('reviews')
             ->selectRaw("YEARWEEK(created_at, 3) as yw, COUNT(*) as c")
             ->whereIn('user_id', $userIds)
-            ->where('status', 'in_progress')
-            ->whereBetween('updated_at', [$start, $end])
+            ->where('status', '!=', 'done')
+            ->whereBetween('created_at', [$start, $end])
             ->groupBy('yw')
             ->pluck('c', 'yw')
             ->all();
 
+        /* -------------------------------
+     * Reviews completed per ISO week
+     * ------------------------------- */
         $reviewRows = DB::table('reviews')
             ->selectRaw("YEARWEEK(updated_at, 3) as yw, COUNT(*) as c")
             ->whereIn('user_id', $userIds)
@@ -618,9 +620,26 @@ class DashboardController extends Controller
             ->pluck('c', 'yw')
             ->all();
 
+        /* -------------------------------
+     * Backlog at START of first week
+     * ------------------------------- */
+        $initialBacklog = DB::table('papers')
+            ->whereIn('created_by', $userIds)
+            ->where('created_at', '<', $start)
+            ->count()
+            -
+            DB::table('reviews')
+            ->whereIn('user_id', $userIds)
+            ->where('status', 'done')
+            ->where('updated_at', '<', $start)
+            ->count();
+
+        $backlog = max(0, $initialBacklog);
+
         $labels = $added = $reviewed = $started = $efficiency = [];
 
         $cursor = $start->copy();
+
         while ($cursor <= $end) {
             $isoY = $cursor->isoWeekYear();
             $isoW = str_pad($cursor->isoWeek(), 2, '0', STR_PAD_LEFT);
@@ -628,12 +647,20 @@ class DashboardController extends Controller
 
             $a = (int) ($addedRows[$key] ?? 0);
             $r = (int) ($reviewRows[$key] ?? 0);
+            $s = (int) ($startedRows[$key] ?? 0);
 
-            $labels[] = "{$isoY}-W{$isoW}";
-            $added[]  = $a;
+            $labels[]   = "{$isoY}-W{$isoW}";
+            $added[]    = $a;
             $reviewed[] = $r;
-            $started[] = (int) ($startedRows[$key] ?? 0);
-            $efficiency[] = $a > 0 ? round(($r / $a) * 100, 1) : 0;
+            $started[]  = $s;
+
+            // ✅ Backlog-based efficiency
+            $efficiency[] = $backlog > 0
+                ? round(($r / $backlog) * 100, 1)
+                : 0;
+
+            // backlog evolves week-by-week
+            $backlog = max(0, $backlog + $a - $r);
 
             $cursor->addWeek();
         }
@@ -643,51 +670,91 @@ class DashboardController extends Controller
             : [$labels, $added, $reviewed];
     }
 
+
     /**
- * Monthly review efficiency (fallback)
- * Returns last N months
- */
-private function monthlyReviewEfficiency(array $userIds, int $monthsBack = 6): array
-{
-    $end   = Carbon::now()->endOfMonth();
-    $start = (clone $end)->subMonths($monthsBack - 1)->startOfMonth();
+     * Monthly review efficiency (fallback)
+     * Returns last N months
+     */
+    private function monthlyReviewEfficiency(array $userIds, int $monthsBack = 6): array
+    {
+        if (empty($userIds)) {
+            return [
+                'labels' => [],
+                'added' => [],
+                'reviewed' => [],
+                'efficiency' => [],
+            ];
+        }
 
-    $addedRows = DB::table('papers')
-        ->selectRaw("DATE_FORMAT(created_at,'%Y-%m') as ym, COUNT(*) as c")
-        ->whereIn('created_by', $userIds)
-        ->whereBetween('updated_at', [$start, $end])
-        ->groupBy('ym')
-        ->pluck('c', 'ym')
-        ->all();
+        $end   = Carbon::now()->endOfMonth();
+        $start = (clone $end)->subMonths($monthsBack - 1)->startOfMonth();
 
-    $reviewedRows = DB::table('reviews')
-        ->selectRaw("DATE_FORMAT(updated_at,'%Y-%m') as ym, COUNT(*) as c")
-        ->whereIn('user_id', $userIds)
-        ->where('status', 'done')
-        ->whereBetween('updated_at', [$start, $end])
-        ->groupBy('ym')
-        ->pluck('c', 'ym')
-        ->all();
+        /* -------------------------------
+     * Added per month
+     * ------------------------------- */
+        $addedRows = DB::table('papers')
+            ->selectRaw("DATE_FORMAT(created_at,'%Y-%m') as ym, COUNT(*) as c")
+            ->whereIn('created_by', $userIds)
+            ->whereBetween('created_at', [$start, $end])
+            ->groupBy('ym')
+            ->pluck('c', 'ym')
+            ->all();
 
-    $labels = $added = $reviewed = $efficiency = [];
+        /* -------------------------------
+     * Reviewed per month
+     * ------------------------------- */
+        $reviewedRows = DB::table('reviews')
+            ->selectRaw("DATE_FORMAT(updated_at,'%Y-%m') as ym, COUNT(*) as c")
+            ->whereIn('user_id', $userIds)
+            ->where('status', 'done')
+            ->whereBetween('updated_at', [$start, $end])
+            ->groupBy('ym')
+            ->pluck('c', 'ym')
+            ->all();
 
-    $cursor = $start->copy();
-    while ($cursor <= $end) {
-        $key = $cursor->format('Y-m');
+        /* -------------------------------
+     * Backlog at START of first month
+     * ------------------------------- */
+        $initialBacklog = DB::table('papers')
+            ->whereIn('created_by', $userIds)
+            ->where('created_at', '<', $start)
+            ->count()
+            -
+            DB::table('reviews')
+            ->whereIn('user_id', $userIds)
+            ->where('status', 'done')
+            ->where('updated_at', '<', $start)
+            ->count();
 
-        $a = (int) ($addedRows[$key] ?? 0);
-        $r = (int) ($reviewedRows[$key] ?? 0);
+        $backlog = max(0, $initialBacklog);
 
-        $labels[] = $cursor->format('M Y');
-        $added[] = $a;
-        $reviewed[] = $r;
-        $efficiency[] = $a > 0 ? round(($r / $a) * 100, 1) : 0;
+        $labels = $added = $reviewed = $efficiency = [];
 
-        $cursor->addMonth();
+        $cursor = $start->copy();
+
+        while ($cursor <= $end) {
+            $key = $cursor->format('Y-m');
+
+            $a = (int) ($addedRows[$key] ?? 0);
+            $r = (int) ($reviewedRows[$key] ?? 0);
+
+            $labels[]   = $cursor->format('M Y');
+            $added[]    = $a;
+            $reviewed[] = $r;
+
+            // ✅ backlog-based efficiency
+            $efficiency[] = $backlog > 0
+                ? round(($r / $backlog) * 100, 1)
+                : 0;
+
+            $backlog = max(0, $backlog + $a - $r);
+
+            $cursor->addMonth();
+        }
+
+        return compact('labels', 'added', 'reviewed', 'efficiency');
     }
 
-    return compact('labels', 'added', 'reviewed', 'efficiency');
-}
 
 
     /**
@@ -754,52 +821,50 @@ private function monthlyReviewEfficiency(array $userIds, int $monthsBack = 6): a
 
 
     /**
- * Distribution of papers by creator (user).
- * Returns [{ name, value }]
- */
-private function byCreatedByForUsers(array $userIds): array
-{
-    if (empty($userIds)) {
-        return [];
+     * Distribution of papers by creator (user).
+     * Returns [{ name, value }]
+     */
+    private function byCreatedByForUsers(array $userIds): array
+    {
+        if (empty($userIds)) {
+            return [];
+        }
+
+        $rows = DB::table('papers')
+            ->join('users', 'users.id', '=', 'papers.created_by')
+            ->whereIn('papers.created_by', $userIds)
+            ->selectRaw('users.id as user_id, COUNT(*) as value')
+            ->groupBy('users.id')
+            ->orderByDesc('value')
+            ->limit(10)
+            ->get();
+
+        // Map ID → display name safely in PHP
+        return $rows->map(function ($row) {
+            $user = User::find($row->user_id);
+            return [
+                'name'  => $user?->name ?: $user?->email ?: "User #{$row->user_id}",
+                'value' => (int) $row->value,
+            ];
+        })->values()->toArray();
     }
 
-    $rows = DB::table('papers')
-        ->join('users', 'users.id', '=', 'papers.created_by')
-        ->whereIn('papers.created_by', $userIds)
-        ->selectRaw('users.id as user_id, COUNT(*) as value')
-        ->groupBy('users.id')
-        ->orderByDesc('value')
-        ->limit(10)
-        ->get();
-
-    // Map ID → display name safely in PHP
-    return $rows->map(function ($row) {
-        $user = User::find($row->user_id);
-        return [
-            'name'  => $user?->name ?: $user?->email ?: "User #{$row->user_id}",
-            'value' => (int) $row->value,
-        ];
-    })->values()->toArray();
-}
 
 
+    private function byCategoryForPaperCategory(array $userIds): array
+    {
+        if (empty($userIds)) {
+            return [];
+        }
 
-private function byCategoryForPaperCategory(array $userIds): array
-{
-    if (empty($userIds)) {
-        return [];
+        $rows = DB::table('papers')
+            ->selectRaw('COALESCE(publisher, "Uncategorized") as name, COUNT(*) as value')
+            ->whereIn('created_by', $userIds)
+            ->groupBy('name')
+            ->orderByDesc('value')
+            ->limit(10)
+            ->get();
+
+        return $rows->toArray();
     }
-
-    $rows = DB::table('papers')
-        ->selectRaw('COALESCE(publisher, "Uncategorized") as name, COUNT(*) as value')
-        ->whereIn('created_by', $userIds)
-        ->groupBy('name')
-        ->orderByDesc('value')
-        ->limit(10)
-        ->get();
-
-    return $rows->toArray();
-}
-
-
 }
