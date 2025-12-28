@@ -595,7 +595,7 @@ class DashboardController extends Controller
         $addedRows = DB::table('papers')
             ->selectRaw("YEARWEEK(created_at, 3) as yw, COUNT(*) as c")
             ->whereIn('created_by', $userIds)
-            ->whereBetween('created_at', [$start, $end])
+            ->whereBetween('updated_at', [$start, $end])
             ->groupBy('yw')
             ->pluck('c', 'yw')
             ->all();
@@ -604,7 +604,7 @@ class DashboardController extends Controller
             ->selectRaw("YEARWEEK(created_at, 3) as yw, COUNT(*) as c")
             ->whereIn('user_id', $userIds)
             ->where('status', 'in_progress')
-            ->whereBetween('created_at', [$start, $end])
+            ->whereBetween('updated_at', [$start, $end])
             ->groupBy('yw')
             ->pluck('c', 'yw')
             ->all();
@@ -655,7 +655,7 @@ private function monthlyReviewEfficiency(array $userIds, int $monthsBack = 6): a
     $addedRows = DB::table('papers')
         ->selectRaw("DATE_FORMAT(created_at,'%Y-%m') as ym, COUNT(*) as c")
         ->whereIn('created_by', $userIds)
-        ->whereBetween('created_at', [$start, $end])
+        ->whereBetween('updated_at', [$start, $end])
         ->groupBy('ym')
         ->pluck('c', 'ym')
         ->all();
