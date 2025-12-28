@@ -53,6 +53,17 @@ class DashboardController extends Controller
                         'labels'   => [],
                         'added'    => [],
                         'reviewed' => [],
+                        'started'  => [],
+                        'efficiency' => [],
+                    ],
+                    'yearly' => [
+                        'labels'   => [],
+                        'counts'   => [],
+                        'percents' => [],
+                    ],
+                    'derived' => [
+                        'reviewCompletionRate' => 0,
+                        'queuePressure'        => 0,
                     ],
                 ],
             ]);
@@ -73,12 +84,22 @@ class DashboardController extends Controller
             ->count();
 
         // If you have a dedicated queue table, use it; otherwise "in queue" = papers with no review row
-        $queueCount   = $this->inferQueueCount($userIds, $totalPapers, $reviewed, $started);
         $inQueue = max($totalPapers - $reviewed - $started, 0);
 
         $collections  = DB::table('collections')
             ->whereIn('user_id', $userIds)
             ->count();
+
+            /* =======================
+         * DERIVED KPIs (NEW)
+         * ======================= */
+        $reviewCompletionRate = $totalPapers > 0
+            ? round(($reviewed / $totalPapers) * 100, 1)
+            : 0;
+
+        $queuePressure = $totalPapers > 0
+            ? round(($inQueue / $totalPapers) * 100, 1)
+            : 0;
 
         // ----- Year-wise Paper Stats (from papers.year column) -----
         $yearStatsRaw = DB::table('papers')
@@ -93,12 +114,15 @@ class DashboardController extends Controller
 
         $yearLabels = [];
         $yearCounts = [];
+        $yearPercents = [];
 
         foreach ($yearStatsRaw as $row) {
             $yearLabels[] = (string) $row->year;
             $yearCounts[] = (int) $row->total;
+            $yearPercents[] = $totalPapers > 0
+                ? round(($row->total / $totalPapers) * 100, 1)
+                : 0;
         }
-
 
         // ----- Weekly (last 8 ISO weeks, Monday start) -----
         $weeksBack = (int) $req->query('weeks', 8);
@@ -119,9 +143,14 @@ class DashboardController extends Controller
                     'started'        => $started,
                     'collections'    => $collections,
                 ],
-                'yearly' => [
-                    'labels' => $yearLabels,
-                    'counts' => $yearCounts,
+               'yearly' => [
+                    'labels'   => $yearLabels,
+                    'counts'   => $yearCounts,
+                    'percents' => $yearPercents,
+                ],
+                'derived' => [
+                    'reviewCompletionRate' => $reviewCompletionRate,
+                    'queuePressure'        => $queuePressure,
                 ],
                 'weekly' => [
                     'labels'   => $labels,
@@ -175,9 +204,18 @@ class DashboardController extends Controller
             'data_points' => count($labels)
         ]);
 
+        // cumulative reviewed (NEW)
+        $cumulativeReviewed = [];
+        $sum = 0;
+        foreach ($reviewed as $v) {
+            $sum += $v;
+            $cumulativeReviewed[] = $sum;
+        }
+
         return response()->json([
-            'data' => compact('labels', 'added', 'reviewed', 'started')
+            'data' => compact('labels', 'added', 'reviewed', 'started', 'cumulativeReviewed'),
         ]);
+
     }
 
     /**
@@ -518,19 +556,27 @@ class DashboardController extends Controller
      *
      * @return array [$labels, $added, $reviewed] or assoc if $asAssoc=true
      */
+    /**
+     * Weekly added vs reviewed (+ efficiency)
+     */
     private function weeklyAddedVsReviewed(array $userIds, int $weeksBack, bool $asAssoc = false): array
     {
         if (empty($userIds)) {
-            $empty = ['labels' => [], 'added' => [], 'reviewed' => []];
+            $empty = [
+                'labels' => [],
+                'added' => [],
+                'reviewed' => [],
+                'started' => [],
+                'efficiency' => [],
+            ];
             return $asAssoc ? $empty : [[], [], []];
         }
 
         $end   = Carbon::now()->startOfWeek(Carbon::MONDAY)->endOfWeek(Carbon::SUNDAY);
         $start = (clone $end)->subWeeks($weeksBack - 1)->startOfWeek(Carbon::MONDAY);
 
-        // papers created per ISO week
         $addedRows = DB::table('papers')
-            ->selectRaw("YEARWEEK(created_at, 3) as yw, COUNT(*) as c") // ISO week
+            ->selectRaw("YEARWEEK(created_at, 3) as yw, COUNT(*) as c")
             ->whereIn('created_by', $userIds)
             ->whereBetween('created_at', [$start, $end])
             ->groupBy('yw')
@@ -546,9 +592,7 @@ class DashboardController extends Controller
             ->pluck('c', 'yw')
             ->all();
 
-
-        // reviews completed per ISO week (use updated_at when status flips to 'done')
-        $revRows = DB::table('reviews')
+        $reviewRows = DB::table('reviews')
             ->selectRaw("YEARWEEK(updated_at, 3) as yw, COUNT(*) as c")
             ->whereIn('user_id', $userIds)
             ->where('status', 'done')
@@ -557,30 +601,29 @@ class DashboardController extends Controller
             ->pluck('c', 'yw')
             ->all();
 
-        $labels = [];
-        $added  = [];
-        $review = [];
+        $labels = $added = $reviewed = $started = $efficiency = [];
 
         $cursor = $start->copy();
         while ($cursor <= $end) {
-            $isoY  = $cursor->isoWeekYear();
-            $isoW  = str_pad($cursor->isoWeek(), 2, '0', STR_PAD_LEFT);
-            $label = "{$isoY}-W{$isoW}";
-            $labels[] = $label;
+            $isoY = $cursor->isoWeekYear();
+            $isoW = str_pad($cursor->isoWeek(), 2, '0', STR_PAD_LEFT);
+            $key  = (int) ($isoY . $isoW);
 
-            // YEARWEEK(...,3) format matches "YYYYWW" numeric; rebuild the key
-            $ywKey   = (int) ($isoY . $isoW);
-            $added[]  = (int) ($addedRows[$ywKey] ?? 0);
-            $review[] = (int) ($revRows[$ywKey] ?? 0);
-            $started[] = (int) ($startedRows[$ywKey] ?? 0);
+            $a = (int) ($addedRows[$key] ?? 0);
+            $r = (int) ($reviewRows[$key] ?? 0);
 
+            $labels[] = "{$isoY}-W{$isoW}";
+            $added[]  = $a;
+            $reviewed[] = $r;
+            $started[] = (int) ($startedRows[$key] ?? 0);
+            $efficiency[] = $a > 0 ? round(($r / $a) * 100, 1) : 0;
 
             $cursor->addWeek();
         }
 
         return $asAssoc
-            ? ['labels' => $labels, 'added' => $added, 'reviewed' => $review, 'started' => $started]
-            : [$labels, $added, $review];
+            ? compact('labels', 'added', 'reviewed', 'started', 'efficiency')
+            : [$labels, $added, $reviewed];
     }
 
     /**
