@@ -125,8 +125,29 @@ class DashboardController extends Controller
         }
 
         // ----- Weekly (last 8 ISO weeks, Monday start) -----
+        // ----- Weekly Review Efficiency (with Monthly fallback) -----
         $weeksBack = (int) $req->query('weeks', 8);
-        [$labels, $added, $reviewedW] = $this->weeklyAddedVsReviewed($userIds, $weeksBack);
+
+        // get full weekly data (assoc)
+        $weekly = $this->weeklyAddedVsReviewed($userIds, $weeksBack, true);
+
+        // detect if weekly efficiency is meaningful
+        $hasWeeklyEfficiency = collect($weekly['efficiency'])->sum() > 0;
+
+        if (!$hasWeeklyEfficiency) {
+            // 🔁 FALLBACK → Monthly efficiency
+            $monthly = $this->monthlyReviewEfficiency($userIds);
+
+            $weekly = [
+                'mode'       => 'monthly',
+                'labels'     => $monthly['labels'],
+                'added'      => $monthly['added'],
+                'reviewed'   => $monthly['reviewed'],
+                'efficiency' => $monthly['efficiency'],
+            ];
+        } else {
+            $weekly['mode'] = 'weekly';
+        }
 
         Log::info('Dashboard summary generated', [
             'total_papers' => $totalPapers,
@@ -152,11 +173,7 @@ class DashboardController extends Controller
                     'reviewCompletionRate' => $reviewCompletionRate,
                     'queuePressure'        => $queuePressure,
                 ],
-                'weekly' => [
-                    'labels'   => $labels,
-                    'added'    => $added,
-                    'reviewed' => $reviewedW,
-                ],
+                'weekly' => $weekly,
                 // optional: category distribution if you keep a category field on papers
                 'byCreatedBy' => $this->byCategoryForPaperCategory($userIds),
             ]
@@ -625,6 +642,53 @@ class DashboardController extends Controller
             ? compact('labels', 'added', 'reviewed', 'started', 'efficiency')
             : [$labels, $added, $reviewed];
     }
+
+    /**
+ * Monthly review efficiency (fallback)
+ * Returns last N months
+ */
+private function monthlyReviewEfficiency(array $userIds, int $monthsBack = 6): array
+{
+    $end   = Carbon::now()->endOfMonth();
+    $start = (clone $end)->subMonths($monthsBack - 1)->startOfMonth();
+
+    $addedRows = DB::table('papers')
+        ->selectRaw("DATE_FORMAT(created_at,'%Y-%m') as ym, COUNT(*) as c")
+        ->whereIn('created_by', $userIds)
+        ->whereBetween('created_at', [$start, $end])
+        ->groupBy('ym')
+        ->pluck('c', 'ym')
+        ->all();
+
+    $reviewedRows = DB::table('reviews')
+        ->selectRaw("DATE_FORMAT(updated_at,'%Y-%m') as ym, COUNT(*) as c")
+        ->whereIn('user_id', $userIds)
+        ->where('status', 'done')
+        ->whereBetween('updated_at', [$start, $end])
+        ->groupBy('ym')
+        ->pluck('c', 'ym')
+        ->all();
+
+    $labels = $added = $reviewed = $efficiency = [];
+
+    $cursor = $start->copy();
+    while ($cursor <= $end) {
+        $key = $cursor->format('Y-m');
+
+        $a = (int) ($addedRows[$key] ?? 0);
+        $r = (int) ($reviewedRows[$key] ?? 0);
+
+        $labels[] = $cursor->format('M Y');
+        $added[] = $a;
+        $reviewed[] = $r;
+        $efficiency[] = $a > 0 ? round(($r / $a) * 100, 1) : 0;
+
+        $cursor->addMonth();
+    }
+
+    return compact('labels', 'added', 'reviewed', 'efficiency');
+}
+
 
     /**
      * Optional: distribution by paper category for given users.
