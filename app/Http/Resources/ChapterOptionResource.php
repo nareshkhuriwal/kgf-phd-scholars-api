@@ -11,6 +11,7 @@ class ChapterOptionResource extends JsonResource
         return [
             'id'    => $this->id,
             'title' => $this->title,
+            'chapter_type'  => $this->chapter_type,
         ];
     }
 }
