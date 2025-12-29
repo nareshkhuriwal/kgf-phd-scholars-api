@@ -6,7 +6,7 @@ use Illuminate\Database\Eloquent\Model;
 
 class Chapter extends Model
 {
-    protected $fillable = ['user_id','collection_id','title','order_index','body_html'];
+    protected $fillable = ['user_id','collection_id','title','order_index', 'body_html', 'chapter_type'];
 
     public function user() { return $this->belongsTo(User::class); }
     public function collection() { return $this->belongsTo(Collection::class); }
