@@ -427,32 +427,78 @@ class ReportController extends Controller
 
         if ($years = Arr::get($filters, 'years', [])) $q->whereIn('papers.year', $years);
 
-        $literature = [];
-        foreach ($q->get() as $rec) {
-            $sections = [];
-            if (!empty($rec->review_sections)) {
-                $sections = is_string($rec->review_sections)
-                    ? (json_decode($rec->review_sections, true) ?: [])
-                    : (array)$rec->review_sections;
-            }
+        $records = $q->get();
 
-            $lit =
-                $sections['Literature Review']
-                // ?? $sections['Litracture Review']
-                ?? $sections['literature_review']
-                ?? null;
+    $literature = [];
+    $otherSections = [];
 
-            if (is_string($lit) && trim(strip_tags($lit)) !== '') {
-                $literature[] = [
-                    'paper_id' => $rec->paper_id,
-                    'title'    => $rec->title,
-                    'authors'  => $rec->authors,
-                    'year'     => $rec->year,
-                    'html'     => $lit,
-                    'text'     => $this->cleanText($lit),
-                ];
+    foreach ($records as $rec) {
+
+        if (empty($rec->review_sections)) {
+            continue;
+        }
+
+        $sections = is_string($rec->review_sections)
+            ? (json_decode($rec->review_sections, true) ?: [])
+            : (array) $rec->review_sections;
+
+        // ---------- LITERATURE (UNCHANGED LOGIC, BUT SAFER KEY MATCHING) ----------
+        $lit = null;
+        foreach ($sections as $key => $value) {
+            $normalizedKey = strtolower(trim($key));
+            if (in_array($normalizedKey, [
+                'literature review',
+                'literature_review',
+                'litracture review'
+            ], true)) {
+                $lit = $value;
+                break;
             }
         }
+
+        if (is_string($lit) && trim(strip_tags($lit)) !== '') {
+            $literature[] = [
+                'paper_id' => $rec->paper_id,
+                'title'    => $rec->title,
+                'authors'  => $rec->authors,
+                'year'     => $rec->year,
+                'html'     => $lit,
+                'text'     => $this->cleanText($lit),
+            ];
+        }
+
+        // ---------- OTHER SECTIONS ----------
+        foreach ($sections as $sectionName => $html) {
+
+            $normalizedKey = strtolower(trim($sectionName));
+
+            // Skip literature variants
+            if (in_array($normalizedKey, [
+                'literature review',
+                'literature_review',
+                'litracture review',
+                'citations',
+                'citation',
+                'references'
+            ], true)) {
+                continue;
+            }
+
+            if (!is_string($html)) continue;
+            if (trim(strip_tags($html)) === '') continue;
+
+            $otherSections[] = [
+                'paper_id' => $rec->paper_id,
+                'title'    => $rec->title,
+                'authors'  => $rec->authors,
+                'year'     => $rec->year,
+                'section'  => $sectionName,
+                'html'     => $html,
+                'text'     => $this->cleanText($html),
+            ];
+        }
+    }
+
 
         // chapters selection (specific user scoped)
         $chapterIds = array_values(array_filter((array) Arr::get($selections, 'chapters', [])));
@@ -521,6 +567,7 @@ class ReportController extends Controller
             'chapters'   => $chapters,
             'citations'  => $formattedCitations,
             'citationStyle' => $citationStyle,
+            'sections'       => $otherSections,
         ];
 
 
@@ -582,7 +629,7 @@ class ReportController extends Controller
         $includeOrder = Arr::get($selections, 'includeOrder', []);
         $chaptersSel  = (array) Arr::get($selections, 'chapters', []);
 
-        $hasROL       = !!array_filter($include, fn($v) => (bool)$v === true);
+        $hasROL = $template !== 'synopsis' && !!array_filter($include, fn($v) => (bool)$v === true);
         $hasChapters  = count($chaptersSel) > 0;
 
         $totalPapers = Paper::whereIn('created_by', $userIds)->count();
@@ -617,6 +664,8 @@ class ReportController extends Controller
             $resp['literature'] = $syn['literature'];
             $resp['chapters']   = $syn['chapters'];
             $resp['citations']   = $syn['citations'];
+            $resp['sections']   = $syn['sections'] ?? [];
+            
         }
 
         if (!$hasROL && !$hasChapters) {
