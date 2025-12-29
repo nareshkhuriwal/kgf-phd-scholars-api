@@ -429,75 +429,87 @@ class ReportController extends Controller
 
         $records = $q->get();
 
-    $literature = [];
-    $otherSections = [];
+        $literature = [];
+        $otherSections = [];
 
-    foreach ($records as $rec) {
+        $selectedSections = collect(Arr::get($selections, 'include', []))
+            ->filter(fn($v) => (bool) $v === true)
+            ->keys()
+            ->map(fn($k) => strtolower(trim($k)))
+            ->values()
+            ->all();
 
-        if (empty($rec->review_sections)) {
-            continue;
-        }
 
-        $sections = is_string($rec->review_sections)
-            ? (json_decode($rec->review_sections, true) ?: [])
-            : (array) $rec->review_sections;
+        foreach ($records as $rec) {
 
-        // ---------- LITERATURE (UNCHANGED LOGIC, BUT SAFER KEY MATCHING) ----------
-        $lit = null;
-        foreach ($sections as $key => $value) {
-            $normalizedKey = strtolower(trim($key));
-            if (in_array($normalizedKey, [
-                'literature review',
-                'literature_review',
-                'litracture review'
-            ], true)) {
-                $lit = $value;
-                break;
-            }
-        }
-
-        if (is_string($lit) && trim(strip_tags($lit)) !== '') {
-            $literature[] = [
-                'paper_id' => $rec->paper_id,
-                'title'    => $rec->title,
-                'authors'  => $rec->authors,
-                'year'     => $rec->year,
-                'html'     => $lit,
-                'text'     => $this->cleanText($lit),
-            ];
-        }
-
-        // ---------- OTHER SECTIONS ----------
-        foreach ($sections as $sectionName => $html) {
-
-            $normalizedKey = strtolower(trim($sectionName));
-
-            // Skip literature variants
-            if (in_array($normalizedKey, [
-                'literature review',
-                'literature_review',
-                'litracture review',
-                'citations',
-                'citation',
-                'references'
-            ], true)) {
+            if (empty($rec->review_sections)) {
                 continue;
             }
 
-            if (!is_string($html)) continue;
-            if (trim(strip_tags($html)) === '') continue;
+            $sections = is_string($rec->review_sections)
+                ? (json_decode($rec->review_sections, true) ?: [])
+                : (array) $rec->review_sections;
 
-            $otherSections[] = [
-                'paper_id' => $rec->paper_id,
-                'title'    => $rec->title,
-                'authors'  => $rec->authors,
-                'year'     => $rec->year,
-                'section'  => $sectionName,
-                'html'     => $html,
-                'text'     => $this->cleanText($html),
-            ];
+            // ---------- LITERATURE (UNCHANGED LOGIC, BUT SAFER KEY MATCHING) ----------
+            $lit = null;
+            foreach ($sections as $key => $value) {
+                $normalizedKey = strtolower(trim($key));
+                if (in_array($normalizedKey, [
+                    'literature review',
+                    'literature_review',
+                    'litracture review'
+                ], true)) {
+                    $lit = $value;
+                    break;
+                }
+            }
+
+            if (is_string($lit) && trim(strip_tags($lit)) !== '') {
+                $literature[] = [
+                    'paper_id' => $rec->paper_id,
+                    'title'    => $rec->title,
+                    'authors'  => $rec->authors,
+                    'year'     => $rec->year,
+                    'html'     => $lit,
+                    'text'     => $this->cleanText($lit),
+                ];
+            }
+
+            // ---------- OTHER SECTIONS ----------
+            foreach ($sections as $sectionName => $html) {
+
+                $normalizedKey = strtolower(trim($sectionName));
+
+                // Skip literature variants
+                if (in_array($normalizedKey, [
+                    'literature review',
+                    'literature_review',
+                    'litracture review',
+                    'citations',
+                    'citation',
+                    'references'
+                ], true)) {
+                    continue;
+                }
+
+                // ✅ NEW: skip if not selected in UI
+                if (!in_array($normalizedKey, $selectedSections, true)) {
+                    continue;
+                }
+                if (!is_string($html)) continue;
+                if (trim(strip_tags($html)) === '') continue;
+
+                $otherSections[] = [
+                    'paper_id' => $rec->paper_id,
+                    'title'    => $rec->title,
+                    'authors'  => $rec->authors,
+                    'year'     => $rec->year,
+                    'section'  => $sectionName,
+                    'html'     => $html,
+                    'text'     => $this->cleanText($html),
+                ];
+            }
         }
-    }
 
 
         // chapters selection (specific user scoped)
@@ -562,12 +574,19 @@ class ReportController extends Controller
             ];
         }
 
+
+
         return [
             'literature' => $literature,
             'chapters'   => $chapters,
             'citations'  => $formattedCitations,
             'citationStyle' => $citationStyle,
-            'sections'       => $otherSections,
+            // 'sections'       => $otherSections,
+            'sections' => collect($otherSections)
+                ->groupBy('section')
+                ->map(fn($items) => $items->pluck('html'))
+                ->toArray(),
+
         ];
 
 
@@ -665,7 +684,6 @@ class ReportController extends Controller
             $resp['chapters']   = $syn['chapters'];
             $resp['citations']   = $syn['citations'];
             $resp['sections']   = $syn['sections'] ?? [];
-            
         }
 
         if (!$hasROL && !$hasChapters) {
