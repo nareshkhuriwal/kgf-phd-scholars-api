@@ -771,7 +771,6 @@ class DashboardController extends Controller
             ->whereIn('created_by', $userIds)
             ->groupBy('name')
             ->orderByDesc('value')
-            ->limit(10)
             ->get();
 
         return $rows->toArray();
