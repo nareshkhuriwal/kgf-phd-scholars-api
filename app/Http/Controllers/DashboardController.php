@@ -835,7 +835,6 @@ class DashboardController extends Controller
             ->selectRaw('users.id as user_id, COUNT(*) as value')
             ->groupBy('users.id')
             ->orderByDesc('value')
-            ->limit(10)
             ->get();
 
         // Map ID → display name safely in PHP
@@ -861,7 +860,6 @@ class DashboardController extends Controller
             ->whereIn('created_by', $userIds)
             ->groupBy('name')
             ->orderByDesc('value')
-            ->limit(10)
             ->get();
 
         return $rows->toArray();
