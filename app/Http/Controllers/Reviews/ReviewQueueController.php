@@ -47,7 +47,8 @@ class ReviewQueueController extends Controller
             ->get()
             ->map(fn ($rq) => $rq->paper)
             ->filter()
-            ->sortByDesc('updated_at') // ✅ THIS FIXES IT
+            // ->sortByDesc('updated_at') // ✅ THIS FIXES IT
+            ->sortBy('id')
             ->values();
 
 
