@@ -26,4 +26,12 @@ class AuthoredPaper extends Model
     {
         return $this->belongsTo(User::class);
     }
+
+    public function comments()
+    {
+        return $this->hasMany(AuthoredPaperComment::class)
+                    ->orderBy('created_at');
+    }
+
+
 }

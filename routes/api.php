@@ -33,7 +33,7 @@ use App\Http\Controllers\CitationController;
 use App\Http\Controllers\CitationTypeController;
 use App\Http\Controllers\ReviewCitationController;
 use App\Http\Controllers\CitationRenderController;
-
+use App\Http\Controllers\AuthoredPaperCommentController;
 
 // Public or rate-limited auth endpoints
 Route::post('/auth/login', [AuthController::class, 'login']);
@@ -49,6 +49,25 @@ Route::get('/library/csv-template', [LibraryImportController::class, 'csvTemplat
 
 
 // Route::middleware(['auth:sanctum','role:superuser'])->get('/monitoring/analytics', [MonitoringController::class, 'analytics']);
+Route::middleware('auth:sanctum')->group(function () {
+    Route::get(
+        '/authored-papers/{paper}/comments',
+        [AuthoredPaperCommentController::class, 'index']
+    );
+    Route::post(
+        '/authored-papers/{paper}/comments',
+        [AuthoredPaperCommentController::class, 'store']
+    );
+    Route::put(
+        '/authored-papers/{paper}/comments/{comment}',
+        [AuthoredPaperCommentController::class, 'update']
+    );
+    Route::delete(
+        '/authored-papers/{paper}/comments/{comment}',
+        [AuthoredPaperCommentController::class, 'destroy']
+    );
+});
+
 
 Route::middleware('auth:sanctum')->group(function () {
     Route::get('/auth/me', [AuthController::class, 'me']);
