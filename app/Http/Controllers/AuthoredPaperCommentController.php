@@ -32,8 +32,22 @@ class AuthoredPaperCommentController extends Controller
 
         $rows = $paper->comments()
             ->with('user')
-            ->orderBy('created_at')
+            ->orderByRaw('parent_id IS NULL DESC') // top-level comments first
+            ->orderByRaw('parent_id IS NOT NULL ASC') // replies after parents
+            ->orderByRaw('
+        CASE 
+            WHEN parent_id IS NULL THEN created_at 
+            ELSE NULL 
+        END DESC
+    ')
+            ->orderByRaw('
+        CASE 
+            WHEN parent_id IS NOT NULL THEN created_at 
+            ELSE NULL 
+        END ASC
+    ')
             ->get();
+
 
         return $rows;
     }
