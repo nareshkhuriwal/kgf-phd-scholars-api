@@ -9,6 +9,10 @@ return new class extends Migration
 {
     public function up()
     {
+        // ✅ Skip if table already exists
+        if (Schema::hasTable('citations')) {
+            return;
+        }
         Schema::table('citations', function (Blueprint $table) {
             $table->foreignId('paper_id')->nullable()->after('id');
             

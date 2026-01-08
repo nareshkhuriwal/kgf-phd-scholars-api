@@ -11,6 +11,10 @@ return new class extends Migration
      */
     public function up(): void
     {
+        // ✅ Skip if table already exists
+        if (Schema::hasTable('saved_reports')) {
+            return;
+        }
         Schema::table('saved_reports', function (Blueprint $table) {
             $table->json('headerFooter')->nullable()->after('selections');
         });

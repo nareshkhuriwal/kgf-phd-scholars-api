@@ -6,6 +6,10 @@ use Illuminate\Support\Facades\Schema;
 
 return new class extends Migration {
   public function up(): void {
+    // ✅ Skip if table already exists
+    if (Schema::hasTable('saved_reports')) {
+        return;
+    }
     Schema::create('saved_reports', function (Blueprint $t) {
       $t->id();
       $t->string('name');

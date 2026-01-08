@@ -6,6 +6,10 @@ use Illuminate\Support\Facades\Schema;
 
 return new class extends Migration {
     public function up(): void {
+        // ✅ Skip if table already exists
+        if (Schema::hasTable('reviews')) {
+            return;
+        }
         Schema::create('reviews', function (Blueprint $t) {
             $t->id();
             $t->foreignId('paper_id')->constrained('papers')->cascadeOnDelete(); // your papers table

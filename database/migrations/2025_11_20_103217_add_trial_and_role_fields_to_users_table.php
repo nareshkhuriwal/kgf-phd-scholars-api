@@ -13,6 +13,10 @@ return new class extends Migration
      */
     public function up(): void
     {
+        // ✅ Skip if table already exists
+        if (Schema::hasTable('users')) {
+            return;
+        }
         Schema::table('users', function (Blueprint $table) {
             // Subscription status: 'active', 'trial', 'expired', 'cancelled'
             if (!Schema::hasColumn('users', 'subscription_status')) {

@@ -8,6 +8,10 @@ return new class extends Migration
 {
     public function up(): void
     {
+        // ✅ Skip if table already exists
+        if (Schema::hasTable('authored_paper_comments')) {
+            return;
+        }
         Schema::create('authored_paper_comments', function (Blueprint $table) {
             $table->id();
 

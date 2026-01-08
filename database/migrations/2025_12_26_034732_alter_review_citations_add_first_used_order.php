@@ -8,6 +8,10 @@ return new class extends Migration
 {
     public function up(): void
     {
+        // ✅ Skip if table already exists
+        if (Schema::hasTable('review_citations')) {
+            return;
+        }
         Schema::table('review_citations', function (Blueprint $table) {
             $table->unsignedInteger('first_used_order')
                   ->nullable()
