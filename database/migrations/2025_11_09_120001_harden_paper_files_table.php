@@ -7,6 +7,10 @@ use Illuminate\Support\Facades\Schema;
 return new class extends Migration {
     public function up(): void
     {
+        // ✅ Skip if table already exists
+        if (Schema::hasTable('paper_files')) {
+            return;
+        }   
         Schema::table('paper_files', function (Blueprint $t) {
             // Helpful composite index for common queries (paper detail page, ordering)
             $t->index(['paper_id', 'created_at'], 'paper_files_paper_created_idx');

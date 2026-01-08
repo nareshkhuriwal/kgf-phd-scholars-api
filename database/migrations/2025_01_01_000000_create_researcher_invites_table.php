@@ -8,6 +8,11 @@ use Illuminate\Support\Facades\Schema;
 return new class extends Migration {
     public function up(): void
     {
+         // ✅ Skip if table already exists
+        if (Schema::hasTable('researcher_invites')) {
+            return;
+        }
+        
         Schema::create('researcher_invites', function (Blueprint $table) {
             $table->id();
             $table->string('researcher_email');

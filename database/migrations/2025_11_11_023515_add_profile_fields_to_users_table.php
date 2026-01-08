@@ -7,6 +7,10 @@ use Illuminate\Support\Facades\Schema;
 return new class extends Migration {
     public function up(): void
     {
+        // ✅ Skip if table already exists
+        if (Schema::hasTable('users')) {
+            return;
+        }
         Schema::table('users', function (Blueprint $table) {
             // Add only if they don't already exist (safe re-run)
             if (! Schema::hasColumn('users', 'phone')) {

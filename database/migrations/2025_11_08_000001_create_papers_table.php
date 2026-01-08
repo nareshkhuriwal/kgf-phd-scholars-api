@@ -6,6 +6,10 @@ use Illuminate\Support\Facades\Schema;
 
 return new class extends Migration {
     public function up(): void {
+        // ✅ Skip if table already exists
+        if (Schema::hasTable('papers')) {
+            return;
+        }
         Schema::create('papers', function (Blueprint $t) {
             $t->id();
             $t->string('paper_code')->nullable();                 // "Paper ID"

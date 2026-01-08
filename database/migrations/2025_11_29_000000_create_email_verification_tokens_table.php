@@ -8,6 +8,10 @@ return new class extends Migration
 {
     public function up(): void
     {
+        // ✅ Skip if table already exists
+        if (Schema::hasTable('email_verification_tokens')) {
+            return;
+        }
         Schema::create('email_verification_tokens', function (Blueprint $table) {
             $table->id();
             $table->string('email')->index();

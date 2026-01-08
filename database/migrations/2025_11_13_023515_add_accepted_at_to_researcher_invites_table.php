@@ -8,6 +8,10 @@ use Illuminate\Support\Facades\Schema;
 return new class extends Migration {
     public function up(): void
     {
+        // ✅ Skip if table already exists
+        if (Schema::hasTable('researcher_invites')) {
+            return;
+        }
         Schema::table('researcher_invites', function (Blueprint $table) {
             $table->timestamp('accepted_at')->nullable()->after('sent_at');
         });
