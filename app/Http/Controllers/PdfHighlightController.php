@@ -154,9 +154,11 @@ class PdfHighlightController extends Controller
 
     /**
      * Convert brush stroke points to bounding rectangle
-     * Filters out closely-spaced points to reduce overlap issues
+     * 
+     * IMPORTANT: Includes brush size/thickness in the rectangle dimensions.
+     * Without this, horizontal strokes become nearly invisible thin lines.
      *
-     * @param array $stroke Brush stroke data with points array
+     * @param array $stroke Brush stroke data with points array and size
      * @return array|null Bounding rectangle or null if invalid
      */
     private function brushStrokeToRect(array $stroke): ?array
@@ -166,6 +168,10 @@ class PdfHighlightController extends Controller
         if (empty($points)) {
             return null;
         }
+
+        // Get brush size (thickness) - DEFAULT to 2% of page if not provided
+        // Clamp between 0.5% and 10% of page dimension for safety
+        $brushSize = $this->clamp($stroke['size'] ?? 0.02, 0.005, 0.1);
 
         // Filter out closely-spaced points to prevent micro-overlaps
         $filtered = [];
@@ -201,8 +207,8 @@ class PdfHighlightController extends Controller
             }
         }
 
-        // Need at least 2 points for a valid stroke
-        if (count($filtered) < 2) {
+        // Need at least 1 point for a valid stroke (single click should work)
+        if (empty($filtered)) {
             return null;
         }
 
@@ -223,11 +229,40 @@ class PdfHighlightController extends Controller
             return null;
         }
 
+        // CRITICAL: Expand bounding box by brush size (half on each side)
+        // This ensures the rectangle matches the visual brush stroke thickness
+        $halfBrush = $brushSize / 2;
+        
+        $minX = max(0.0, $minX - $halfBrush);
+        $minY = max(0.0, $minY - $halfBrush);
+        $maxX = min(1.0, $maxX + $halfBrush);
+        $maxY = min(1.0, $maxY + $halfBrush);
+
+        // Ensure minimum dimensions (at least brush size)
+        $width = $maxX - $minX;
+        $height = $maxY - $minY;
+        
+        // If stroke is mostly horizontal, ensure minimum height equals brush size
+        if ($height < $brushSize) {
+            $centerY = ($minY + $maxY) / 2;
+            $minY = max(0.0, $centerY - $halfBrush);
+            $maxY = min(1.0, $centerY + $halfBrush);
+            $height = $maxY - $minY;
+        }
+        
+        // If stroke is mostly vertical, ensure minimum width equals brush size
+        if ($width < $brushSize) {
+            $centerX = ($minX + $maxX) / 2;
+            $minX = max(0.0, $centerX - $halfBrush);
+            $maxX = min(1.0, $centerX + $halfBrush);
+            $width = $maxX - $minX;
+        }
+
         return [
             'x' => $minX,
             'y' => $minY,
-            'w' => max(self::MIN_RECT_SIZE, $maxX - $minX),
-            'h' => max(self::MIN_RECT_SIZE, $maxY - $minY),
+            'w' => max(self::MIN_RECT_SIZE, $width),
+            'h' => max(self::MIN_RECT_SIZE, $height),
         ];
     }
 
@@ -407,6 +442,7 @@ class PdfHighlightController extends Controller
             'replace'          => $request->boolean('replace', false),
             'highlights_count' => count($request->input('highlights', [])),
             'brush_count'      => count($request->input('brushHighlights', [])),
+            'payload'         => $request->all(),
         ];
 
         try {
