@@ -11,36 +11,79 @@ use App\Http\Controllers\Concerns\OwnerAuthorizes;
 use App\Http\Controllers\Concerns\ResolvesPublicUploads;
 use App\Services\AuditLogger;
 
+/**
+ * PDF Highlight Controller
+ * 
+ * Applies highlights to PDF documents with:
+ * - Overlap detection and rectangle merging (prevents dark/compounded highlights)
+ * - Style-based grouping (only merges highlights with same color/alpha)
+ * - Brush stroke optimization (filters closely-spaced points)
+ * - Comprehensive logging and audit trail
+ * 
+ * @version 2.1.0
+ */
 class PdfHighlightController extends Controller
 {
     use OwnerAuthorizes;
     use ResolvesPublicUploads;
 
-    // Configuration constants
+    /* =========================================================
+     * CONFIGURATION CONSTANTS
+     * ========================================================= */
+
+    /** @var int Maximum number of rectangles to process */
     private const MAX_RECTS = 2000;
+
+    /** @var float Default highlight opacity (0.0 - 1.0) */
     private const DEFAULT_ALPHA = 0.25;
+
+    /** @var string Default highlight color (hex) */
     private const DEFAULT_COLOR = '#FFEB3B';
-    private const OVERLAP_TOLERANCE = 0.005; // 0.5% of page
-    private const MIN_BRUSH_DISTANCE = 0.005; // 0.5% of page
+
+    /** @var float Overlap tolerance for merging (0.5% of page dimension) */
+    private const OVERLAP_TOLERANCE = 0.005;
+
+    /** @var float Minimum distance between brush stroke points (0.5% of page) */
+    private const MIN_BRUSH_DISTANCE = 0.005;
+
+    /** @var float Minimum rectangle dimension to prevent zero-size rects */
     private const MIN_RECT_SIZE = 0.0001;
 
-    /* ---------------------------------------------------------
+    /** @var int Maximum merge iterations (safety limit) */
+    private const MAX_MERGE_ITERATIONS = 50;
+
+    /* =========================================================
      * HELPER METHODS
-     * --------------------------------------------------------- */
+     * ========================================================= */
 
     /**
-     * Clamp value between 0 and 1
+     * Clamp value between 0 and 1, returns null for invalid input
+     *
+     * @param mixed $v Value to clamp
+     * @return float|null Clamped value or null if invalid
      */
     private function clamp01($v): ?float
     {
         if (!is_numeric($v)) {
             return null;
         }
-        return max(0.0, min(1.0, (float) $v));
+        
+        $val = (float) $v;
+        
+        if (!is_finite($val)) {
+            return null;
+        }
+        
+        return max(0.0, min(1.0, $val));
     }
 
     /**
      * Clamp value between min and max
+     *
+     * @param mixed $v Value to clamp
+     * @param float $min Minimum value
+     * @param float $max Maximum value
+     * @return float Clamped value
      */
     private function clamp($v, float $min, float $max): float
     {
@@ -52,15 +95,23 @@ class PdfHighlightController extends Controller
 
     /**
      * Convert hex color to RGB array
+     *
+     * @param string $hex Hex color string (with or without #)
+     * @return array [r, g, b] values (0-255)
      */
     private function hexToRgb(string $hex): array
     {
         $hex = ltrim($hex, '#');
-        
-        if (strlen($hex) !== 6) {
-            return [255, 235, 59]; // fallback yellow
+
+        // Handle 3-character shorthand (e.g., #FFF)
+        if (strlen($hex) === 3) {
+            $hex = $hex[0] . $hex[0] . $hex[1] . $hex[1] . $hex[2] . $hex[2];
         }
-        
+
+        if (strlen($hex) !== 6) {
+            return [255, 235, 59]; // Fallback: yellow
+        }
+
         return [
             hexdec(substr($hex, 0, 2)),
             hexdec(substr($hex, 2, 2)),
@@ -69,12 +120,49 @@ class PdfHighlightController extends Controller
     }
 
     /**
+     * Generate a style key for grouping rectangles
+     * Rectangles with same style key can be merged together
+     *
+     * @param array|null $style Style array with color and alpha
+     * @return string Unique key for this style combination
+     */
+    private function getStyleKey(?array $style): string
+    {
+        $color = strtolower($style['color'] ?? self::DEFAULT_COLOR);
+        $alpha = round($style['alpha'] ?? self::DEFAULT_ALPHA, 2);
+        
+        return $color . '_' . $alpha;
+    }
+
+    /**
+     * Normalize style array with defaults
+     *
+     * @param array|null $style Raw style input
+     * @return array Normalized style with color and alpha
+     */
+    private function normalizeStyle(?array $style): array
+    {
+        return [
+            'color' => $style['color'] ?? self::DEFAULT_COLOR,
+            'alpha' => $this->clamp($style['alpha'] ?? self::DEFAULT_ALPHA, 0.0, 1.0),
+        ];
+    }
+
+    /* =========================================================
+     * BRUSH STROKE PROCESSING
+     * ========================================================= */
+
+    /**
      * Convert brush stroke points to bounding rectangle
      * Filters out closely-spaced points to reduce overlap issues
+     *
+     * @param array $stroke Brush stroke data with points array
+     * @return array|null Bounding rectangle or null if invalid
      */
     private function brushStrokeToRect(array $stroke): ?array
     {
         $points = $stroke['points'] ?? [];
+        
         if (empty($points)) {
             return null;
         }
@@ -90,7 +178,7 @@ class PdfHighlightController extends Controller
 
             $x = $this->clamp01($p['x']);
             $y = $this->clamp01($p['y']);
-            
+
             if ($x === null || $y === null) {
                 continue;
             }
@@ -99,9 +187,9 @@ class PdfHighlightController extends Controller
                 $filtered[] = ['x' => $x, 'y' => $y];
                 $lastPoint = ['x' => $x, 'y' => $y];
             } else {
-                // Calculate Euclidean distance
+                // Calculate Euclidean distance from last point
                 $dist = sqrt(
-                    pow($x - $lastPoint['x'], 2) + 
+                    pow($x - $lastPoint['x'], 2) +
                     pow($y - $lastPoint['y'], 2)
                 );
 
@@ -113,11 +201,12 @@ class PdfHighlightController extends Controller
             }
         }
 
+        // Need at least 2 points for a valid stroke
         if (count($filtered) < 2) {
             return null;
         }
 
-        // Calculate bounding box
+        // Calculate bounding box from filtered points
         $minX = INF;
         $minY = INF;
         $maxX = -INF;
@@ -142,27 +231,38 @@ class PdfHighlightController extends Controller
         ];
     }
 
-    /* ---------------------------------------------------------
+    /* =========================================================
      * OVERLAP DETECTION & MERGING
-     * --------------------------------------------------------- */
+     * ========================================================= */
 
     /**
      * Check if two rectangles overlap (with tolerance)
+     *
+     * @param array $r1 First rectangle with x, y, w, h
+     * @param array $r2 Second rectangle with x, y, w, h
+     * @return bool True if rectangles overlap
      */
     private function rectsOverlap(array $r1, array $r2): bool
     {
         $tolerance = self::OVERLAP_TOLERANCE;
 
-        return !(
-            $r1['x'] + $r1['w'] + $tolerance < $r2['x'] || 
-            $r2['x'] + $r2['w'] + $tolerance < $r1['x'] ||
-            $r1['y'] + $r1['h'] + $tolerance < $r2['y'] || 
-            $r2['y'] + $r2['h'] + $tolerance < $r1['y']
+        // Check if rectangles are completely separated
+        $separated = (
+            $r1['x'] + $r1['w'] + $tolerance < $r2['x'] ||  // r1 left of r2
+            $r2['x'] + $r2['w'] + $tolerance < $r1['x'] ||  // r2 left of r1
+            $r1['y'] + $r1['h'] + $tolerance < $r2['y'] ||  // r1 above r2
+            $r2['y'] + $r2['h'] + $tolerance < $r1['y']     // r2 above r1
         );
+
+        return !$separated;
     }
 
     /**
-     * Merge two overlapping rectangles into one
+     * Merge two overlapping rectangles into their bounding box
+     *
+     * @param array $r1 First rectangle
+     * @param array $r2 Second rectangle
+     * @return array Merged rectangle (bounding box of both)
      */
     private function mergeRects(array $r1, array $r2): array
     {
@@ -176,13 +276,16 @@ class PdfHighlightController extends Controller
             'y' => $minY,
             'w' => $maxX - $minX,
             'h' => $maxY - $minY,
-            'style' => $r1['style'] ?? $r2['style'],
+            'style' => $r1['style'] ?? $r2['style'] ?? [],
         ];
     }
 
     /**
      * Merge all overlapping rectangles in an array
      * Uses iterative approach until no more overlaps exist
+     *
+     * @param array $rects Array of rectangles to merge
+     * @return array Merged rectangles (no overlaps)
      */
     private function mergeOverlappingRects(array $rects): array
     {
@@ -193,10 +296,9 @@ class PdfHighlightController extends Controller
         $merged = $rects;
         $didMerge = true;
         $iterations = 0;
-        $maxIterations = 10; // Safety limit
 
         // Keep merging until no more overlaps found
-        while ($didMerge && $iterations < $maxIterations) {
+        while ($didMerge && $iterations < self::MAX_MERGE_ITERATIONS) {
             $didMerge = false;
             $newMerged = [];
             $used = array_fill(0, count($merged), false);
@@ -229,24 +331,74 @@ class PdfHighlightController extends Controller
             $iterations++;
         }
 
+        // Log warning if we hit the iteration limit
+        if ($iterations >= self::MAX_MERGE_ITERATIONS) {
+            Log::warning('PDF Highlight: Max merge iterations reached', [
+                'iterations' => $iterations,
+                'remaining_rects' => count($merged),
+            ]);
+        }
+
         return $merged;
     }
 
-    /* ---------------------------------------------------------
+    /**
+     * Merge overlapping rectangles grouped by style
+     * 
+     * KEY FIX: Only merge rectangles that have the same color and alpha.
+     * This prevents different colored highlights from being incorrectly merged.
+     *
+     * @param array $rects Array of rectangles with style information
+     * @return array Merged rectangles (only same-style overlaps merged)
+     */
+    private function mergeOverlappingRectsByStyle(array $rects): array
+    {
+        if (empty($rects)) {
+            return [];
+        }
+
+        // Group rectangles by their style (color + alpha)
+        $groups = [];
+        
+        foreach ($rects as $rect) {
+            $styleKey = $this->getStyleKey($rect['style'] ?? null);
+            
+            if (!isset($groups[$styleKey])) {
+                $groups[$styleKey] = [];
+            }
+            
+            $groups[$styleKey][] = $rect;
+        }
+
+        // Merge overlapping rectangles within each style group
+        $result = [];
+        
+        foreach ($groups as $styleKey => $groupRects) {
+            $mergedGroup = $this->mergeOverlappingRects($groupRects);
+            
+            foreach ($mergedGroup as $rect) {
+                $result[] = $rect;
+            }
+        }
+
+        return $result;
+    }
+
+    /* =========================================================
      * MAIN APPLY HIGHLIGHTS METHOD
-     * --------------------------------------------------------- */
+     * ========================================================= */
 
     /**
-     * Apply highlights to a PDF
-     * 
-     * @param ApplyHighlightsRequest $request
-     * @param Paper $paper
+     * Apply highlights to a PDF document
+     *
+     * @param ApplyHighlightsRequest $request Validated request with highlights data
+     * @param Paper $paper Paper model instance
      * @return \Illuminate\Http\JsonResponse
      */
     public function apply(ApplyHighlightsRequest $request, Paper $paper)
     {
         $startTime = microtime(true);
-        
+
         $this->authorizeOwner($paper, 'created_by');
 
         // Prepare audit payload early (raw user intent)
@@ -258,11 +410,11 @@ class PdfHighlightController extends Controller
         ];
 
         try {
-            // -----------------------------------------------------
-            // 1. RESOLVE SOURCE PDF
-            // -----------------------------------------------------
+            /* ---------------------------------------------------------
+             * 1. RESOLVE SOURCE PDF
+             * --------------------------------------------------------- */
             $sourceUrl = (string) ($request->input('sourceUrl') ?? $request->input('source_url') ?? '');
-            
+
             if ($sourceUrl) {
                 [$srcDisk, $srcPath] = $this->resolveFromUrl($sourceUrl);
             } else {
@@ -276,16 +428,17 @@ class PdfHighlightController extends Controller
             $absIn = Storage::disk($srcDisk)->path($srcPath);
             $replace = $request->boolean('replace', false);
 
-            // -----------------------------------------------------
-            // 2. NORMALIZE & COLLECT HIGHLIGHTS
-            // -----------------------------------------------------
+            /* ---------------------------------------------------------
+             * 2. NORMALIZE & COLLECT HIGHLIGHTS
+             * --------------------------------------------------------- */
             $cleanByPage = [];
             $rectCount = 0;
             $skippedRects = 0;
 
-            // Process regular highlights
+            // Process regular highlights (selection-based)
             foreach ((array) $request->input('highlights', []) as $h) {
                 $page = (int) ($h['page'] ?? 0);
+                
                 if ($page <= 0) {
                     continue;
                 }
@@ -301,32 +454,41 @@ class PdfHighlightController extends Controller
                     $w = $this->clamp01($r['w'] ?? null);
                     $hgt = $this->clamp01($r['h'] ?? null);
 
+                    // Validate all coordinates are present
                     if ($x === null || $y === null || $w === null || $hgt === null) {
                         $skippedRects++;
                         continue;
                     }
 
-                    if ($w <= 0 || $hgt <= 0) {
+                    // Skip zero or negative dimensions
+                    if ($w <= self::MIN_RECT_SIZE || $hgt <= self::MIN_RECT_SIZE) {
                         $skippedRects++;
                         continue;
                     }
+
+                    // Normalize style with defaults
+                    $style = $this->normalizeStyle(
+                        is_array($r['style'] ?? null) ? $r['style'] : null
+                    );
 
                     $cleanByPage[$page][] = [
                         'x'     => $x,
                         'y'     => $y,
                         'w'     => $w,
                         'h'     => $hgt,
-                        'style' => is_array($r['style'] ?? null) ? $r['style'] : null,
+                        'style' => $style,
                     ];
 
                     $rectCount++;
                 }
             }
 
-            // Process brush highlights
+            // Process brush highlights (freehand drawing)
             $brushStrokesProcessed = 0;
+            
             foreach ((array) $request->input('brushHighlights', []) as $b) {
                 $page = (int) ($b['page'] ?? 0);
+                
                 if ($page <= 0) {
                     continue;
                 }
@@ -337,18 +499,25 @@ class PdfHighlightController extends Controller
                         continue;
                     }
 
+                    // Convert brush stroke to bounding rectangle
                     $rect = $this->brushStrokeToRect($stroke);
+                    
                     if (!$rect) {
                         $skippedRects++;
                         continue;
                     }
+
+                    // Normalize style with defaults
+                    $style = $this->normalizeStyle(
+                        is_array($stroke['style'] ?? null) ? $stroke['style'] : null
+                    );
 
                     $cleanByPage[$page][] = [
                         'x'     => $rect['x'],
                         'y'     => $rect['y'],
                         'w'     => $rect['w'],
                         'h'     => $rect['h'],
-                        'style' => is_array($stroke['style'] ?? null) ? $stroke['style'] : null,
+                        'style' => $style,
                     ];
 
                     $rectCount++;
@@ -356,11 +525,12 @@ class PdfHighlightController extends Controller
                 }
             }
 
+            // Validate we have at least some highlights
             if (empty($cleanByPage)) {
                 throw new \InvalidArgumentException('No valid highlights found');
             }
 
-            // Log skipped rectangles if any
+            // Log skipped rectangles if significant
             if ($skippedRects > 0) {
                 Log::warning('PDF Highlight: Skipped rectangles', [
                     'paper_id' => $paper->id,
@@ -369,27 +539,28 @@ class PdfHighlightController extends Controller
                 ]);
             }
 
-            // -----------------------------------------------------
-            // 3. MERGE OVERLAPPING HIGHLIGHTS (KEY IMPROVEMENT)
-            // -----------------------------------------------------
+            /* ---------------------------------------------------------
+             * 3. MERGE OVERLAPPING HIGHLIGHTS BY STYLE (KEY FIX)
+             * --------------------------------------------------------- */
             $totalRectsBeforeMerge = array_sum(array_map('count', $cleanByPage));
-            
+
             foreach ($cleanByPage as $pageNo => $rects) {
-                $cleanByPage[$pageNo] = $this->mergeOverlappingRects($rects);
+                // Merge only same-style overlapping rectangles
+                $cleanByPage[$pageNo] = $this->mergeOverlappingRectsByStyle($rects);
             }
 
             $totalRectsAfterMerge = array_sum(array_map('count', $cleanByPage));
-            $mergeReduction = $totalRectsBeforeMerge > 0 
-                ? round((1 - $totalRectsAfterMerge / $totalRectsBeforeMerge) * 100, 1) 
+            $mergeReduction = $totalRectsBeforeMerge > 0
+                ? round((1 - $totalRectsAfterMerge / $totalRectsBeforeMerge) * 100, 1)
                 : 0;
 
-            // -----------------------------------------------------
-            // 4. PREPARE OUTPUT PATH
-            // -----------------------------------------------------
+            /* ---------------------------------------------------------
+             * 4. PREPARE OUTPUT PATH
+             * --------------------------------------------------------- */
             $dir = trim(dirname($srcPath), '/');
             $base = pathinfo($srcPath, PATHINFO_FILENAME);
             $timestamp = now()->format('Ymd_His');
-            
+
             $outRel = ($replace ? $dir : ($dir . '/highlighted'))
                 . "/{$base}_hl_{$timestamp}.pdf";
 
@@ -399,13 +570,13 @@ class PdfHighlightController extends Controller
 
             $absOut = Storage::disk($srcDisk)->path($outRel);
 
-            // -----------------------------------------------------
-            // 5. RENDER PDF WITH HIGHLIGHTS
-            // -----------------------------------------------------
+            /* ---------------------------------------------------------
+             * 5. RENDER PDF WITH HIGHLIGHTS
+             * --------------------------------------------------------- */
             $pdf = new Fpdi();
             $pdf->setPrintHeader(false);
             $pdf->setPrintFooter(false);
-            
+
             $pageCount = $pdf->setSourceFile($absIn);
 
             foreach (range(1, $pageCount) as $pageNo) {
@@ -417,7 +588,7 @@ class PdfHighlightController extends Controller
 
                 // Apply highlights for this page
                 $pageRects = $cleanByPage[$pageNo] ?? [];
-                
+
                 foreach ($pageRects as $rect) {
                     $style = $rect['style'] ?? [];
                     $color = $style['color'] ?? self::DEFAULT_COLOR;
@@ -428,12 +599,13 @@ class PdfHighlightController extends Controller
                     $pdf->SetFillColor($r, $g, $b);
                     $pdf->SetAlpha($alpha);
 
+                    // Convert normalized coordinates (0-1) to PDF points
                     $pdf->Rect(
                         $rect['x'] * $size['width'],
                         $rect['y'] * $size['height'],
                         $rect['w'] * $size['width'],
                         $rect['h'] * $size['height'],
-                        'F' // Fill
+                        'F' // Fill only
                     );
                 }
 
@@ -441,13 +613,14 @@ class PdfHighlightController extends Controller
                 $pdf->SetAlpha(1.0);
             }
 
+            // Set PDF metadata
             $pdf->SetTitle('Highlighted Document');
             $pdf->SetCreator('PDF Highlight System');
             $pdf->Output($absOut, 'F');
 
-            // -----------------------------------------------------
-            // 6. HANDLE REPLACEMENT IF NEEDED
-            // -----------------------------------------------------
+            /* ---------------------------------------------------------
+             * 6. HANDLE REPLACEMENT IF REQUESTED
+             * --------------------------------------------------------- */
             if ($replace) {
                 Storage::disk($srcDisk)->delete($srcPath);
                 Storage::disk($srcDisk)->move($outRel, $srcPath);
@@ -457,9 +630,9 @@ class PdfHighlightController extends Controller
             $url = Storage::disk($srcDisk)->url($outRel);
             $duration = round((microtime(true) - $startTime) * 1000, 2);
 
-            // -----------------------------------------------------
-            // 7. LOG SUCCESS METRICS
-            // -----------------------------------------------------
+            /* ---------------------------------------------------------
+             * 7. LOG SUCCESS METRICS
+             * --------------------------------------------------------- */
             Log::info('PDF Highlight: Success', [
                 'paper_id' => $paper->id,
                 'pages' => $pageCount,
@@ -472,9 +645,9 @@ class PdfHighlightController extends Controller
                 'replaced' => $replace,
             ]);
 
-            // -----------------------------------------------------
-            // 8. AUDIT LOG — SUCCESS
-            // -----------------------------------------------------
+            /* ---------------------------------------------------------
+             * 8. AUDIT LOG — SUCCESS
+             * --------------------------------------------------------- */
             AuditLogger::log(
                 request: $request,
                 action: 'pdf.highlight.apply',
@@ -487,6 +660,9 @@ class PdfHighlightController extends Controller
                 success: true
             );
 
+            /* ---------------------------------------------------------
+             * 9. RETURN SUCCESS RESPONSE
+             * --------------------------------------------------------- */
             return response()->json([
                 'success'  => true,
                 'message'  => 'Highlights applied successfully',
@@ -504,9 +680,9 @@ class PdfHighlightController extends Controller
         } catch (\Throwable $e) {
             $duration = round((microtime(true) - $startTime) * 1000, 2);
 
-            // -----------------------------------------------------
-            // LOG FAILURE
-            // -----------------------------------------------------
+            /* ---------------------------------------------------------
+             * LOG FAILURE
+             * --------------------------------------------------------- */
             Log::error('PDF Highlight: Failed', [
                 'paper_id' => $paper->id,
                 'error' => $e->getMessage(),
@@ -514,9 +690,9 @@ class PdfHighlightController extends Controller
                 'trace' => $e->getTraceAsString(),
             ]);
 
-            // -----------------------------------------------------
-            // AUDIT LOG — FAILURE
-            // -----------------------------------------------------
+            /* ---------------------------------------------------------
+             * AUDIT LOG — FAILURE
+             * --------------------------------------------------------- */
             AuditLogger::log(
                 request: $request,
                 action: 'pdf.highlight.apply',
