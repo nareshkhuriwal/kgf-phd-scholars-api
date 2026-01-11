@@ -99,7 +99,22 @@ Route::middleware('auth:sanctum')->group(function () {
 
 
 
-    Route::post('/papers/{paper}/highlights/apply', [PdfHighlightController::class, 'apply']);
+    // Route::post('/papers/{paper}/highlights/apply', [PdfHighlightController::class, 'apply']);
+    // PDF Highlight Routes
+    Route::prefix('papers/{paper}/highlights')->group(function () {
+        // Apply highlights to PDF
+        Route::post('/apply', [PdfHighlightController::class, 'apply'])
+            ->name('papers.highlights.apply');
+        
+        // Reset all highlights (restore original PDF)
+        Route::post('/reset', [PdfHighlightController::class, 'reset'])
+            ->name('papers.highlights.reset');
+        
+        // Clear session (optional - mainly for frontend confirmation)
+        Route::post('/clear-session', [PdfHighlightController::class, 'clearSession'])
+            ->name('papers.highlights.clearSession');
+    });
+
     Route::post('/pdfs/upload', [PdfHighlightController::class, 'store']); // generic
 
     Route::get('/dashboard/summary', [DashboardController::class, 'summary']);

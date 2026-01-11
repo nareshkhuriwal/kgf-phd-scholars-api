@@ -10,6 +10,7 @@ use setasign\Fpdi\Tcpdf\Fpdi;
 use App\Http\Controllers\Concerns\OwnerAuthorizes;
 use App\Http\Controllers\Concerns\ResolvesPublicUploads;
 use App\Services\AuditLogger;
+use Illuminate\Http\Request;
 
 /**
  * PDF Highlight Controller
@@ -743,4 +744,120 @@ class PdfHighlightController extends Controller
             throw $e;
         }
     }
+
+
+    /* =========================================================
+     * RESET HIGHLIGHTS - RESTORE ORIGINAL PDF
+     * ========================================================= */
+
+    /**
+     * Reset highlights by restoring the original unhighlighted PDF
+     *
+     * @param Request $request
+     * @param Paper $paper
+     * @return \Illuminate\Http\JsonResponse
+     */
+    public function reset(Request $request, Paper $paper)
+    {
+        $startTime = microtime(true);
+
+        $this->authorizeOwner($paper, 'created_by');
+
+        try {
+            // Get the original PDF path (unhighlighted version)
+            $originalPath = $paper->original_file_path ?? $paper->file_path;
+            
+            if (!$originalPath) {
+                throw new \RuntimeException('Original PDF path not found');
+            }
+
+            // Determine disk
+            $disk = $paper->file_disk ?? 'local';
+            
+            if (!Storage::disk($disk)->exists($originalPath)) {
+                throw new \RuntimeException('Original PDF file not found');
+            }
+
+            // If there's a highlighted version, delete it
+            $highlightedPath = $paper->highlighted_file_path;
+            if ($highlightedPath && Storage::disk($disk)->exists($highlightedPath)) {
+                Storage::disk($disk)->delete($highlightedPath);
+            }
+
+            // Update paper to point back to original
+            $paper->update([
+                'file_path' => $originalPath,
+                'highlighted_file_path' => null,
+                'highlighted_at' => null,
+            ]);
+
+            $url = Storage::disk($disk)->url($originalPath);
+            $duration = round((microtime(true) - $startTime) * 1000, 2);
+
+            Log::info('PDF Highlight: Reset successful', [
+                'paper_id' => $paper->id,
+                'restored_path' => $originalPath,
+                'duration_ms' => $duration,
+            ]);
+
+            AuditLogger::log(
+                request: $request,
+                action: 'pdf.highlight.reset',
+                entityType: Paper::class,
+                entityId: $paper->id,
+                payload: ['restored_path' => $originalPath],
+                success: true
+            );
+
+            return response()->json([
+                'success' => true,
+                'message' => 'Highlights reset successfully',
+                'file_url' => $url,
+                'raw_url' => $url,
+            ]);
+
+        } catch (\Throwable $e) {
+            $duration = round((microtime(true) - $startTime) * 1000, 2);
+
+            Log::error('PDF Highlight: Reset failed', [
+                'paper_id' => $paper->id,
+                'error' => $e->getMessage(),
+                'duration_ms' => $duration,
+            ]);
+
+            AuditLogger::log(
+                request: $request,
+                action: 'pdf.highlight.reset',
+                entityType: Paper::class,
+                entityId: $paper->id,
+                payload: [],
+                success: false,
+                errorMessage: $e->getMessage()
+            );
+
+            throw $e;
+        }
+    }
+
+    /**
+     * Clear current session highlights (doesn't affect saved PDF)
+     * This is useful if you want to start fresh without affecting the saved state
+     *
+     * @param Request $request
+     * @param Paper $paper
+     * @return \Illuminate\Http\JsonResponse
+     */
+    public function clearSession(Request $request, Paper $paper)
+    {
+        $this->authorizeOwner($paper, 'created_by');
+
+        // This endpoint just confirms the clear action
+        // The actual clearing happens on the frontend
+        
+        return response()->json([
+            'success' => true,
+            'message' => 'Session cleared',
+        ]);
+    }
+    
 }
