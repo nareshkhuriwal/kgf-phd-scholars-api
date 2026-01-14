@@ -74,22 +74,11 @@ class PdfHighlightController extends Controller
      * APPLY HIGHLIGHTS (MAIN FIXED METHOD)
      * --------------------------------------------------------- */
 
-public function apply(ApplyHighlightsRequest $request, Paper $paper)
-{
-    $this->authorizeOwner($paper, 'created_by');
+    public function apply(ApplyHighlightsRequest $request, Paper $paper)
+    {
+        $this->authorizeOwner($paper, 'created_by');
 
-    // Prepare audit payload early (raw user intent)
-    $auditPayload = [
-        'source_url'       => $request->input('sourceUrl') ?? $request->input('source_url'),
-        'replace'          => $request->boolean('replace', false),
-        'highlights'       => $request->input('highlights', []),
-        'brush_highlights' => $request->input('brushHighlights', []),
-    ];
-
-    try {
-        // -----------------------------------------------------
         // Resolve source PDF
-        // -----------------------------------------------------
         $sourceUrl = (string) ($request->input('sourceUrl') ?? $request->input('source_url') ?? '');
         if ($sourceUrl) {
             [$srcDisk, $srcPath] = $this->resolveFromUrl($sourceUrl);
@@ -98,15 +87,16 @@ public function apply(ApplyHighlightsRequest $request, Paper $paper)
         }
 
         if (!$srcDisk || !$srcPath || !Storage::disk($srcDisk)->exists($srcPath)) {
-            throw new \RuntimeException('PDF not found');
+            return response()->json(['message' => 'PDF not found'], 404);
         }
 
         $absIn   = Storage::disk($srcDisk)->path($srcPath);
         $replace = $request->boolean('replace', false);
 
-        // -----------------------------------------------------
-        // NORMALIZE HIGHLIGHTS
-        // -----------------------------------------------------
+        /* -----------------------------------------------------
+         * NORMALIZE HIGHLIGHTS (KEEP STYLE!)
+         * ----------------------------------------------------- */
+
         $cleanByPage = [];
         $MAX_RECTS = 2000;
         $rectCount = 0;
@@ -155,12 +145,13 @@ public function apply(ApplyHighlightsRequest $request, Paper $paper)
         }
 
         if (!$cleanByPage) {
-            throw new \InvalidArgumentException('No valid highlights');
+            return response()->json(['message' => 'No valid highlights'], 422);
         }
 
-        // -----------------------------------------------------
-        // OUTPUT PATH
-        // -----------------------------------------------------
+        /* -----------------------------------------------------
+         * OUTPUT PATH
+         * ----------------------------------------------------- */
+
         $dir   = trim(dirname($srcPath), '/');
         $base  = pathinfo($srcPath, PATHINFO_FILENAME);
         $outRel = ($replace ? $dir : ($dir . '/highlighted'))
@@ -172,9 +163,10 @@ public function apply(ApplyHighlightsRequest $request, Paper $paper)
 
         $absOut = Storage::disk($srcDisk)->path($outRel);
 
-        // -----------------------------------------------------
-        // RENDER PDF
-        // -----------------------------------------------------
+        /* -----------------------------------------------------
+         * RENDER PDF (PER-RECT STYLE – FINAL FIX)
+         * ----------------------------------------------------- */
+
         $pdf = new Fpdi();
         $pageCount = $pdf->setSourceFile($absIn);
 
@@ -186,6 +178,7 @@ public function apply(ApplyHighlightsRequest $request, Paper $paper)
             $pdf->useTemplate($tplIdx);
 
             foreach ($cleanByPage[$pageNo] ?? [] as $rect) {
+
                 $style = $rect['style'] ?? [];
                 $color = $style['color'] ?? '#FFEB3B';
                 $alpha = $this->clamp($style['alpha'] ?? 0.25, 0.0, 1.0);
@@ -218,42 +211,11 @@ public function apply(ApplyHighlightsRequest $request, Paper $paper)
 
         $url = Storage::disk($srcDisk)->url($outRel);
 
-        // -----------------------------------------------------
-        // AUDIT LOG — SUCCESS
-        // -----------------------------------------------------
-        AuditLogger::log(
-            request: $request,
-            action: 'pdf.highlight.apply',
-            entityType: Paper::class,
-            entityId: $paper->id,
-            payload: $auditPayload,
-            success: true
-        );
-
         return response()->json([
             'message'  => 'Highlights applied',
             'file_url' => $url,
             'raw_url'  => $url,
             'replaced' => $replace,
         ]);
-
-    } catch (\Throwable $e) {
-
-        // -----------------------------------------------------
-        // AUDIT LOG — FAILURE
-        // -----------------------------------------------------
-        AuditLogger::log(
-            request: $request,
-            action: 'pdf.highlight.apply',
-            entityType: Paper::class,
-            entityId: $paper->id,
-            payload: $auditPayload,
-            success: false,
-            errorMessage: $e->getMessage()
-        );
-
-        throw $e; // preserve existing error handling
     }
-}
-
 }
