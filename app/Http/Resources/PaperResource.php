@@ -3,7 +3,7 @@
 namespace App\Http\Resources;
 
 use Illuminate\Http\Resources\Json\JsonResource;
-use Illuminate\Support\Facades\Storage;
+use App\Http\Resources\PaperCommentResource;
 
 class PaperResource extends JsonResource
 {
@@ -16,36 +16,37 @@ class PaperResource extends JsonResource
         }
 
         return [
-            'id'          => $this->id,
-            'Paper ID'    => $this->paper_code,
-            'Title'       => $this->title,
-            'Author(s)'   => $this->authors,
-            'DOI'         => $this->doi,
-            'Year'        => $this->year,
-            'Category of Paper' => $this->category,
-            'Name of Journal/Conference' => $this->journal,
-            'ISSN / ISBN' => $this->issn_isbn,
-            'Name of Publisher / Organization' => $this->publisher,
-            'Place of Conference' => $this->place,
-            'Volume'      => $this->volume,
-            'Issue'       => $this->issue,
-            'Page No'     => $this->page_no,
-            'Area / Sub Area' => $this->area,
-            'Key Issue'   => $this->key_issue,
+            'id'            => $this->id,
+            'paper_code'    => $this->paper_code,
+            'title'         => $this->title,
+            'authors'       => $this->authors,
+            'doi'           => $this->doi,
+            'year'          => $this->year,
+            'category'      => $this->category,
+            'journal'       => $this->journal,
+            'issn_isbn'     => $this->issn_isbn,
+            'publisher'     => $this->publisher,
+            'place'         => $this->place,
+            'volume'        => $this->volume,
+            'issue'         => $this->issue,
+            'page_no'       => $this->page_no,
+            'area'          => $this->area,
+            'citation_type_code' => $this->citation_type_code,
 
-            // HTML fields
-            'Litracture Review' => $this->review_html,
-            'Solution Approach / Methodology used' => $this->solution_method_html,
-            'Related Work'      => $this->related_work_html,
-            'Input Parameters used' => $this->input_params_html,
-            'Hardware / Software / Technology Used' => $this->hw_sw_html,
-            'Results'       => $this->results_html,
-            'Key advantages'=> $this->advantages_html,
-            'Limitations'   => $this->limitations_html,
-            'Remarks'       => $this->remarks_html,
 
             // optional convenience for the viewer
             'pdf_url' => $primaryUrl,
+
+            // Creator name
+            'created_by' => $this->whenLoaded('creator', 
+                fn() => $this->creator?->name,
+                fn() => null
+            ),
+
+            // PAPER COMMENTS (NEW)
+            'comments' => PaperCommentResource::collection(
+                $this->whenLoaded('comments')
+            ),
 
             // Related files (true relation)
             'files' => $this->whenLoaded('files', fn() =>

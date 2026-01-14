@@ -6,6 +6,10 @@ use Illuminate\Support\Facades\Schema;
 
 return new class extends Migration {
     public function up(): void {
+        // ✅ Skip if table already exists
+        if (Schema::hasTable('reviews')) {
+            return;
+        }   
         Schema::table('reviews', function (Blueprint $table) {
             // JSON works with MySQL 5.7+/MariaDB 10.2.7+/Postgres
             if (!Schema::hasColumn('reviews', 'review_sections')) {

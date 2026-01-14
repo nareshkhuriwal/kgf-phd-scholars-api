@@ -10,27 +10,37 @@ use Illuminate\Http\Request;
 use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Storage;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Database\QueryException;
 use App\Http\Controllers\Concerns\OwnerAuthorizes;
-use App\Http\Controllers\Concerns\SupervisesResearchers;
+use App\Support\ResolvesApiScope;
+use App\Models\Citation; // ✅ Add this import
 
 class PaperController extends Controller
 {
-    use OwnerAuthorizes, SupervisesResearchers;
-    
+    use OwnerAuthorizes, ResolvesApiScope;
+
     public function index(Request $req)
     {
-        // Scope to current user's papers
-        // $q = Paper::query()
-        //     ->where('created_by', $req->user()->id)
-        //     ->withCount('files');
-            
-        $visibleUserIds = $this->visibleUserIdsForCurrent($req);
+        $req->user() ?? abort(401, 'Unauthenticated');
+
+        Log::info('Paper index called', [
+            'user_id' => $req->user()->id,
+            'role' => $req->user()->role
+        ]);
+
+        // Get accessible user IDs
+        $userIds = $this->resolveApiUserIds($req);
+
+        Log::info('Accessible user IDs for papers', [
+            'user_ids' => $userIds,
+            'count' => count($userIds)
+        ]);
 
         $q = Paper::query()
-            ->whereIn('created_by', $visibleUserIds)
+            ->whereIn('created_by', $userIds)
+            ->with('creator:id,name,email,role') // Load creator with only needed fields
             ->withCount('files');
-            
 
         if ($s = $req->get('search')) {
             $q->where(function ($w) use ($s) {
@@ -40,6 +50,7 @@ class PaperController extends Controller
                     ->orWhere('paper_code', 'like', "%$s%");
             });
         }
+
         if ($cat = $req->get('category')) {
             $q->where('category', $cat);
         }
@@ -47,36 +58,62 @@ class PaperController extends Controller
         // support common variants (snake_case, camelCase, limit)
         $perRaw = $req->get('per_page', $req->get('perPage', $req->get('limit', null)));
         $per = (int) ($perRaw ?: 10);
-        
+
         // guard: reasonable min/max to avoid massive pages
         $min = 5;
         $max = 200;
         if ($per < $min) $per = $min;
         if ($per > $max) $per = $max;
-        
+
         // explicitly pass page too (safer when client sets page)
         $page = (int) $req->get('page', 1);
-        
+
         $sortBy = $req->get('sort_by', 'id');
         $sortDir = strtolower($req->get('sort_dir', 'asc')) === 'asc' ? 'asc' : 'desc';
         $allowed = ['id', 'title', 'authors', 'year', 'doi', 'created_at', 'updated_at'];
-        if (!in_array($sortBy, $allowed)) { $sortBy = 'title'; }
+        if (!in_array($sortBy, $allowed)) {
+            $sortBy = 'title';
+        }
         $q->orderBy($sortBy, $sortDir);
         $p = $q->paginate($per, ['*'], 'page', $page);
+
+        Log::info('Papers retrieved', [
+            'total' => $p->total(),
+            'per_page' => $per,
+            'current_page' => $page
+        ]);
 
         return PaperResource::collection($p);
     }
 
-    public function show(Paper $paper)
+    public function show(Request $req, Paper $paper)
     {
-        $this->authorizeOwner($paper, 'created_by');
+        $req->user() ?? abort(401, 'Unauthenticated');
+
+        Log::info('Paper show called', [
+            'paper_id' => $paper->id,
+            'user_id' => $req->user()->id
+        ]);
+
+        // Check if user has access to this paper's owner
+        $this->authorizeUserAccess($req, $paper->created_by);
+
+        Log::info('User authorized to view paper', [
+            'paper_id' => $paper->id,
+            'paper_owner' => $paper->created_by
+        ]);
+
         $paper->load('files');
         return new PaperResource($paper);
     }
 
     public function store(PaperRequest $req)
     {
-        $userId = $req->user()->id ?? null;
+        $userId = $req->user()->id ?? abort(401, 'Unauthenticated');
+
+        Log::info('Creating new paper', [
+            'user_id' => $userId
+        ]);
 
         $paper = DB::transaction(function () use ($req, $userId) {
             $data = $req->validated();
@@ -84,13 +121,25 @@ class PaperController extends Controller
 
             $paper = Paper::create($data);
 
+            // ✅ Automatically create citation from paper
+            $this->createCitationFromPaper($paper);
+
             // If a file came with the create request, attach it now
             if ($req->hasFile('file')) {
                 $this->attachFileToPaper($paper, $req->file('file'), $userId);
+                Log::info('File attached to new paper', [
+                    'paper_id' => $paper->id,
+                    'filename' => $req->file('file')->getClientOriginalName()
+                ]);
             }
 
             return $paper->fresh('files');
         });
+
+        Log::info('Paper created successfully', [
+            'paper_id' => $paper->id,
+            'has_file' => $paper->files->isNotEmpty()
+        ]);
 
         return (new PaperResource($paper))
             ->response()
@@ -99,27 +148,112 @@ class PaperController extends Controller
 
     public function update(PaperRequest $req, Paper $paper)
     {
-        $this->authorizeOwner($paper, 'created_by');
+        $req->user() ?? abort(401, 'Unauthenticated');
 
-        $userId = $req->user()->id ?? null;
+        Log::info('Paper update called', [
+            'paper_id' => $paper->id,
+            'user_id' => $req->user()->id
+        ]);
+
+        // Check if user has access to this paper's owner
+        $this->authorizeUserAccess($req, $paper->created_by);
+
+        $userId = $req->user()->id;
 
         $paper = DB::transaction(function () use ($req, $paper, $userId) {
-            $paper->update($req->validated());
+            $data = $req->validated();
+            unset($data['file']);
 
-            // Optional: if client uploads a new file during update, attach it too
+            $paper->update($data);
+
+            // ✅ Update or create citation when paper is updated
+            $this->updateOrCreateCitationFromPaper($paper);
+
             if ($req->hasFile('file')) {
                 $this->attachFileToPaper($paper, $req->file('file'), $userId);
+                Log::info('File attached to updated paper', [
+                    'paper_id' => $paper->id,
+                    'filename' => $req->file('file')->getClientOriginalName()
+                ]);
             }
 
             return $paper->fresh('files');
         });
 
+        Log::info('Paper updated successfully', [
+            'paper_id' => $paper->id
+        ]);
+
         return new PaperResource($paper);
     }
 
-    public function destroy(Paper $paper)
+    /**
+     * Upload / replace PDF file for an existing paper.
+     * POST /api/papers/{paper}/file
+     */
+    public function updateFile(Request $req, Paper $paper)
     {
-        $this->authorizeOwner($paper, 'created_by');
+        $req->user() ?? abort(401, 'Unauthenticated');
+
+        Log::info('Paper file update called', [
+            'paper_id' => $paper->id,
+            'user_id' => $req->user()->id
+        ]);
+
+        // Check if user has access to this paper's owner
+        $this->authorizeUserAccess($req, $paper->created_by);
+
+        $userId = $req->user()->id;
+
+        $req->validate([
+            'file' => ['required', 'file', 'mimes:pdf', 'max:51200'], // 50MB
+        ]);
+
+        DB::transaction(function () use ($paper, $req, $userId) {
+            $oldFileCount = $paper->files->count();
+
+            // OPTIONAL: remove old files (recommended = replace behavior)
+            foreach ($paper->files as $old) {
+                try {
+                    Storage::disk($old->disk)->delete($old->path);
+                } catch (\Throwable $e) {
+                    Log::warning('Failed to delete old file from storage', [
+                        'paper_id' => $paper->id,
+                        'file_id' => $old->id,
+                        'error' => $e->getMessage()
+                    ]);
+                }
+                $old->delete();
+            }
+
+            // Attach new file
+            $this->attachFileToPaper(
+                $paper,
+                $req->file('file'),
+                $userId
+            );
+
+            Log::info('Paper file replaced', [
+                'paper_id' => $paper->id,
+                'old_file_count' => $oldFileCount,
+                'new_filename' => $req->file('file')->getClientOriginalName()
+            ]);
+        });
+
+        return new PaperResource($paper->fresh('files'));
+    }
+
+    public function destroy(Request $req, Paper $paper)
+    {
+        $req->user() ?? abort(401, 'Unauthenticated');
+
+        Log::info('Paper destroy called', [
+            'paper_id' => $paper->id,
+            'user_id' => $req->user()->id
+        ]);
+
+        // Check if user has access to this paper's owner
+        $this->authorizeUserAccess($req, $paper->created_by);
 
         $attempts = 0;
         $max = 3;
@@ -128,6 +262,7 @@ class PaperController extends Controller
             try {
                 DB::transaction(function () use ($paper) {
                     $paper->load('files');
+                    $fileCount = $paper->files->count();
 
                     // Delete blobs first (ignore if already gone)
                     foreach ($paper->files as $file) {
@@ -136,23 +271,40 @@ class PaperController extends Controller
                         try {
                             Storage::disk($disk)->delete($path);
                         } catch (\Throwable $e) {
-                            // swallow filesystem errors (file might already be removed)
+                            Log::warning('Failed to delete paper file from storage', [
+                                'paper_id' => $paper->id,
+                                'file_id' => $file->id,
+                                'error' => $e->getMessage()
+                            ]);
                         }
                         $file->delete();
                     }
 
                     // Finally delete the paper row
                     $paper->delete();
+
+                    Log::info('Paper deleted successfully', [
+                        'paper_id' => $paper->id,
+                        'files_deleted' => $fileCount
+                    ]);
                 });
 
                 return response()->json(['ok' => true]);
             } catch (QueryException $e) {
                 $attempts++;
-                // Handle MySQL “Prepared statement needs to be re-prepared” (HY000/1615) on shared hosting
+                // Handle MySQL "Prepared statement needs to be re-prepared" (HY000/1615) on shared hosting
                 if ($attempts < $max && str_contains($e->getMessage(), '1615')) {
+                    Log::warning('Retry paper deletion due to MySQL 1615 error', [
+                        'paper_id' => $paper->id,
+                        'attempt' => $attempts
+                    ]);
                     usleep(150000); // 150ms backoff
                     continue;
                 }
+                Log::error('Failed to delete paper', [
+                    'paper_id' => $paper->id,
+                    'error' => $e->getMessage()
+                ]);
                 throw $e;
             }
         }
@@ -160,14 +312,34 @@ class PaperController extends Controller
 
     public function bulkDestroy(BulkDeletePapersRequest $req)
     {
-        $userId = auth()->id();
+        $userId = $req->user()->id ?? abort(401, 'Unauthenticated');
         $ids = $req->validated()['ids'];
 
-        // Restrict to user-owned IDs only (silently ignore others)
+        Log::info('Bulk paper destroy called', [
+            'user_id' => $userId,
+            'requested_ids' => $ids,
+            'count' => count($ids)
+        ]);
+
+        // Get accessible user IDs
+        $userIds = $this->resolveApiUserIds($req);
+
+        // Restrict to accessible user-owned IDs only (silently ignore others)
         $ownedIds = Paper::whereIn('id', $ids)
-            ->where('created_by', $userId)
+            ->whereIn('created_by', $userIds)
             ->pluck('id')
             ->all();
+
+        Log::info('Papers filtered by accessible users', [
+            'requested_count' => count($ids),
+            'accessible_count' => count($ownedIds),
+            'accessible_ids' => $ownedIds
+        ]);
+
+        if (empty($ownedIds)) {
+            Log::warning('No accessible papers found for bulk deletion');
+            return response()->json(['ok' => true, 'deleted' => []]);
+        }
 
         $attempts = 0;
         $max = 3;
@@ -176,6 +348,7 @@ class PaperController extends Controller
             try {
                 DB::transaction(function () use ($ownedIds) {
                     $papers = Paper::with('files')->whereIn('id', $ownedIds)->get();
+                    $totalFiles = 0;
 
                     foreach ($papers as $paper) {
                         foreach ($paper->files as $file) {
@@ -183,8 +356,13 @@ class PaperController extends Controller
                             $path = $file->path;
                             try {
                                 Storage::disk($disk)->delete($path);
+                                $totalFiles++;
                             } catch (\Throwable $e) {
-                                // ignore blob delete errors
+                                Log::warning('Failed to delete file during bulk deletion', [
+                                    'paper_id' => $paper->id,
+                                    'file_id' => $file->id,
+                                    'error' => $e->getMessage()
+                                ]);
                             }
                             $file->delete();
                         }
@@ -192,20 +370,117 @@ class PaperController extends Controller
 
                     // Delete papers at the end (FKs may cascade other relations)
                     Paper::whereIn('id', $ownedIds)->delete();
+
+                    Log::info('Bulk paper deletion completed', [
+                        'papers_deleted' => count($ownedIds),
+                        'files_deleted' => $totalFiles
+                    ]);
                 });
 
                 return response()->json(['ok' => true, 'deleted' => $ownedIds]);
             } catch (QueryException $e) {
                 $attempts++;
                 if ($attempts < $max && str_contains($e->getMessage(), '1615')) {
+                    Log::warning('Retry bulk deletion due to MySQL 1615 error', [
+                        'attempt' => $attempts
+                    ]);
                     usleep(150000);
                     continue;
                 }
+                Log::error('Failed bulk paper deletion', [
+                    'error' => $e->getMessage()
+                ]);
                 throw $e;
             }
         }
     }
 
+    /**
+     * ✅ Create a citation from paper data
+     */
+    private function createCitationFromPaper(Paper $paper): Citation
+    {
+        Log::info('Creating citation from paper', [
+            'paper_id' => $paper->id,
+            'paper_code' => $paper->paper_code
+        ]);
+
+        $citation = Citation::create([
+            'paper_id' => $paper->id,
+            'citation_key' => $paper->paper_code ?: 'PAPER-' . $paper->id,
+            'citation_type_code' => $paper->citation_type_code,
+            'title' => $paper->title,
+            'authors' => $paper->authors,
+            'year' => $paper->year,
+            'journal' => $paper->journal,
+            'volume' => $paper->volume,
+            'issue' => $paper->issue,
+            'pages' => $paper->page_no,
+            'publisher' => $paper->publisher,
+            'doi' => $paper->doi,
+            'isbn' => $paper->issn_isbn,
+            'created_from' => 'paper',
+        ]);
+
+        Log::info('Citation created from paper', [
+            'citation_id' => $citation->id,
+            'citation_key' => $citation->citation_key
+        ]);
+
+        return $citation;
+    }
+
+    /**
+     * ✅ Update existing citation or create new one
+     */
+    private function updateOrCreateCitationFromPaper(Paper $paper): Citation
+    {
+        Log::info('Updating or creating citation from paper', [
+            'paper_id' => $paper->id,
+            'paper_code' => $paper->paper_code
+        ]);
+
+        // Find existing citation by paper_id or citation_key
+        $citation = Citation::where('paper_id', $paper->id)
+            ->orWhere('citation_key', $paper->paper_code)
+            ->first();
+
+        $citationData = [
+            'paper_id' => $paper->id,
+            'citation_key' => $paper->paper_code ?: 'PAPER-' . $paper->id,
+            'citation_type_code' => $paper->citation_type_code,
+            'title' => $paper->title,
+            'authors' => $paper->authors,
+            'year' => $paper->year,
+            'journal' => $paper->journal,
+            'volume' => $paper->volume,
+            'issue' => $paper->issue,
+            'pages' => $paper->page_no,
+            'publisher' => $paper->publisher,
+            'doi' => $paper->doi,
+            'isbn' => $paper->issn_isbn,
+        ];
+
+        if ($citation) {
+            // Update existing citation
+            $citation->update($citationData);
+            Log::info('Citation updated from paper', [
+                'citation_id' => $citation->id,
+                'citation_key' => $citation->citation_key
+            ]);
+        } else {
+            // Create new citation
+            $citationData['created_from'] = 'paper';
+            $citation = Citation::create($citationData);
+            Log::info('New citation created from paper', [
+                'citation_id' => $citation->id,
+                'citation_key' => $citation->citation_key
+            ]);
+        }
+
+        return $citation;
+    }
+    
     /**
      * Save an uploaded file to storage and create the paper_files row.
      */
@@ -231,5 +506,4 @@ class PaperController extends Controller
             'uploaded_by'   => $userId,
         ]);
     }
-
 }

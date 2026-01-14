@@ -11,4 +11,5 @@ class PaperComment extends Model
     public function paper(): BelongsTo { return $this->belongsTo(Paper::class); }
     public function user(): BelongsTo { return $this->belongsTo(User::class); }
     public function parent(): BelongsTo { return $this->belongsTo(self::class,'parent_id'); }
+    public function children() { return $this->hasMany(self::class,'parent_id'); }
 }

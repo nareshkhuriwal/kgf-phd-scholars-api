@@ -6,6 +6,10 @@ use Illuminate\Support\Facades\Schema;
 
 return new class extends Migration {
     public function up(): void {
+        // ✅ Skip if table already exists
+        if (Schema::hasTable('papers')) {
+            return;
+        }
         Schema::create('papers', function (Blueprint $t) {
             $t->id();
             $t->string('paper_code')->nullable();                 // "Paper ID"
@@ -25,7 +29,7 @@ return new class extends Migration {
             $t->text('key_issue')->nullable();
 
             // Rich text HTML fields
-            $t->longText('review_html')->nullable();              // Litracture Review
+            $t->longText('review_html')->nullable();              // Literature Review
             $t->longText('solution_method_html')->nullable();     // Solution Approach / Methodology used
             $t->longText('related_work_html')->nullable();
             $t->longText('input_params_html')->nullable();

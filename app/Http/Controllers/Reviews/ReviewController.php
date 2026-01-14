@@ -11,39 +11,70 @@ use App\Http\Resources\ReviewResource;
 use App\Models\Paper;
 use App\Models\Review;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Log;
+use App\Http\Resources\FlatReviewResource;
+use App\Support\ResolvesApiScope;
 
 class ReviewController extends Controller
 {
-    use OwnerAuthorizes;
+    use OwnerAuthorizes, ResolvesApiScope;
 
     public function show(Request $request, Paper $paper)
     {
         $request->user() ?? abort(401, 'Unauthenticated');
-        $this->authorizeOwner($paper, 'created_by');
 
-        $review = Review::firstOrCreate(
-            ['paper_id' => $paper->id, 'user_id' => $request->user()->id],
-            [
+        Log::info('Review show method called', [
+            'paper_id' => $paper->id,
+            'user_id' => $request->user()->id,
+            'role' => $request->user()->role
+        ]);
+
+        // Check if user has access to this paper's owner
+        $this->authorizeUserAccess($request, $paper->created_by);
+
+        Log::info('User authorized to access paper', [
+            'paper_id' => $paper->id,
+            'paper_owner' => $paper->created_by
+        ]);
+
+        // Get accessible user IDs
+        $userIds = $this->resolveApiUserIds($request);
+
+        // Get review for any of the accessible user IDs
+        $review = Review::where('paper_id', $paper->id)
+            ->whereIn('user_id', $userIds)
+            ->first();
+
+        Log::info('Review lookup result', [
+            'found' => $review ? true : false,
+            'review_id' => $review?->id,
+            'searched_user_ids' => $userIds
+        ]);
+
+        // If no review exists, create one for the current user
+        if (!$review) {
+            $review = Review::create([
+                'paper_id'        => $paper->id,
+                'user_id'         => $request->user()->id,
                 'status'          => Review::STATUS_DRAFT,
                 'review_sections' => [],
-            ]
-        );
+            ]);
 
-        // Backward-compat: hydrate empty review_sections from legacy fields
-        if (empty($review->review_sections)) {
-            $map = [
-                'Litracture Review' => $review->html,
-                'Key Issue'         => $review->key_issue,
-                'Remarks'           => $review->remarks,
-            ];
-            $review->review_sections = array_filter($map, fn ($v) => filled($v));
-            $review->save();
+            Log::info('Created new review', [
+                'review_id' => $review->id,
+                'paper_id' => $paper->id,
+                'user_id' => $request->user()->id
+            ]);
         }
 
-        // IMPORTANT: load paper with files so ReviewResource can expose pdf_url
-        $review->load(['paper.files']);
+        // Load paper with files and comments
+        $review->load(['paper.files', 'paper.comments.user', 'paper.comments.children.user']);
+        
+        Log::info('Returning review resource', [
+            'review_id' => $review->id
+        ]);
 
-        return new ReviewResource($review);
+        return new FlatReviewResource($review);
     }
 
     /**
@@ -54,7 +85,14 @@ class ReviewController extends Controller
     public function update(SaveReviewRequest $request, Paper $paper)
     {
         $request->user() ?? abort(401, 'Unauthenticated');
-        $this->authorizeOwner($paper, 'created_by');
+
+        Log::info('Review update method called', [
+            'paper_id' => $paper->id,
+            'user_id' => $request->user()->id
+        ]);
+
+        // Check if user has access to this paper's owner
+        $this->authorizeUserAccess($request, $paper->created_by);
 
         $review = Review::firstOrCreate(
             ['paper_id' => $paper->id, 'user_id' => $request->user()->id],
@@ -64,34 +102,63 @@ class ReviewController extends Controller
             ]
         );
 
-        // We deliberately ignore any incoming 'status' here; status is driven by workflow.
-        $data = $request->only(['html', 'key_issue', 'remarks', 'review_sections']);
+        Log::info('Review found or created', [
+            'review_id' => $review->id,
+            'status' => $review->status
+        ]);
 
-        // Update structured sections (JSON)
+        // ---- Decode main HTML (CRITICAL) ----
+        if ($request->filled('html')) {
+            $decodedHtml = base64_decode($request->input('html'), true);
+
+            if ($decodedHtml === false) {
+                Log::error('Invalid HTML encoding', [
+                    'review_id' => $review->id
+                ]);
+                abort(422, 'Invalid HTML encoding');
+            }
+
+            $review->html = $decodedHtml;
+        }
+
+        // ---- Structured sections (already decoded client-side or separate flow) ----
         if ($request->has('review_sections')) {
-            $incoming = $data['review_sections'];
+            $incoming = $request->input('review_sections');
             if (is_array($incoming)) {
-                // Replace complete sections by design
                 $review->review_sections = $incoming;
+                Log::info('Review sections updated', [
+                    'review_id' => $review->id,
+                    'section_count' => count($incoming)
+                ]);
             }
         }
 
-        // Keep legacy fields for exports/back-compat
-        foreach (['html', 'key_issue', 'remarks'] as $k) {
-            if ($request->filled($k)) {
-                $review->{$k} = $data[$k];
+        // ---- Legacy fields (DO NOT touch html again) ----
+        foreach (['key_issue', 'remarks'] as $field) {
+            if ($request->filled($field)) {
+                $review->{$field} = $request->input($field);
             }
         }
 
-        // Any full save moves to in_progress (unless archived)
+        // ---- Status transition ----
         if ($review->status !== Review::STATUS_ARCHIVED) {
+            $oldStatus = $review->status;
             $review->status = Review::STATUS_IN_PROGRESS;
+            Log::info('Review status updated', [
+                'review_id' => $review->id,
+                'old_status' => $oldStatus,
+                'new_status' => $review->status
+            ]);
         }
 
         $review->save();
-        $review->load(['paper.files']);
+        $review->load(['paper.files', 'paper.comments.user', 'paper.comments.children.user']);
 
-        return new ReviewResource($review);
+        Log::info('Review updated successfully', [
+            'review_id' => $review->id
+        ]);
+
+        return new FlatReviewResource($review);
     }
 
     /**
@@ -102,7 +169,15 @@ class ReviewController extends Controller
     public function updateSection(SaveReviewSectionRequest $request, Paper $paper)
     {
         $request->user() ?? abort(401, 'Unauthenticated');
-        $this->authorizeOwner($paper, 'created_by');
+
+        Log::info('Review section update called', [
+            'paper_id' => $paper->id,
+            'user_id' => $request->user()->id,
+            'section_key' => $request->input('section_key')
+        ]);
+
+        // Check if user has access to this paper's owner
+        $this->authorizeUserAccess($request, $paper->created_by);
 
         $review = Review::firstOrCreate(
             ['paper_id' => $paper->id, 'user_id' => $request->user()->id],
@@ -112,20 +187,40 @@ class ReviewController extends Controller
             ]
         );
 
+        // ✅ DECODE HTML (CRITICAL)
+        $decodedHtml = base64_decode($request->input('html'), true);
+
+        if ($decodedHtml === false) {
+            Log::error('Invalid HTML encoding in section update', [
+                'review_id' => $review->id,
+                'section_key' => $request->input('section_key')
+            ]);
+            abort(422, 'Invalid HTML encoding');
+        }
+
         $sections = $review->review_sections ?? [];
-        $sections[$request->input('section_key')] = $request->input('html') ?? '';
+        $sectionKey = $request->input('section_key');
+        $sections[$sectionKey] = $decodedHtml;
         $review->review_sections = $sections;
 
-        // Any section save moves to in_progress (unless archived)
+        Log::info('Review section updated', [
+            'review_id' => $review->id,
+            'section_key' => $sectionKey,
+            'html_length' => strlen($decodedHtml)
+        ]);
+
         if ($review->status !== Review::STATUS_ARCHIVED) {
             $review->status = Review::STATUS_IN_PROGRESS;
         }
 
-        // Do not touch $review->html here (full concat stays in full update)
         $review->save();
-        $review->load(['paper.files']);
+        $review->load(['paper.files', 'paper.comments.user', 'paper.comments.children.user']);
 
-        return new ReviewResource($review);
+        Log::info('Section update completed', [
+            'review_id' => $review->id
+        ]);
+
+        return new FlatReviewResource($review);
     }
 
     /**
@@ -135,7 +230,15 @@ class ReviewController extends Controller
     public function updateStatus(SaveReviewStatusRequest $request, Paper $paper)
     {
         $request->user() ?? abort(401, 'Unauthenticated');
-        $this->authorizeOwner($paper, 'created_by');
+
+        Log::info('Review status update called', [
+            'paper_id' => $paper->id,
+            'user_id' => $request->user()->id,
+            'requested_status' => $request->input('status')
+        ]);
+
+        // Check if user has access to this paper's owner
+        $this->authorizeUserAccess($request, $paper->created_by);
 
         $review = Review::firstOrCreate(
             ['paper_id' => $paper->id, 'user_id' => $request->user()->id],
@@ -145,10 +248,52 @@ class ReviewController extends Controller
             ]
         );
 
+        $oldStatus = $review->status;
         $review->status = $request->input('status'); // draft | in_progress | done | archived
         $review->save();
-        $review->load(['paper.files']);
 
-        return new ReviewResource($review);
+        Log::info('Review status updated', [
+            'review_id' => $review->id,
+            'old_status' => $oldStatus,
+            'new_status' => $review->status
+        ]);
+
+        $review->load(['paper.files', 'paper.comments.user', 'paper.comments.children.user']);
+
+        return new FlatReviewResource($review);
+    }
+
+    /**
+     * READ sections only
+     * GET /reviews/{paper}/sections
+     */
+    public function sections(Request $request, Paper $paper)
+    {
+        $request->user() ?? abort(401, 'Unauthenticated');
+
+        Log::info('Review sections read called', [
+            'paper_id' => $paper->id,
+            'user_id' => $request->user()->id
+        ]);
+
+        // Check if user has access to this paper's owner
+        $this->authorizeUserAccess($request, $paper->created_by);
+
+        $review = Review::firstOrCreate(
+            ['paper_id' => $paper->id, 'user_id' => $request->user()->id],
+            [
+                'status'          => Review::STATUS_DRAFT,
+                'review_sections' => [],
+            ]
+        );
+
+        Log::info('Review sections retrieved', [
+            'review_id' => $review->id,
+            'section_count' => count($review->review_sections ?? [])
+        ]);
+
+        $review->load(['paper.files', 'paper.comments.user', 'paper.comments.children.user']);
+
+        return new FlatReviewResource($review);
     }
 }

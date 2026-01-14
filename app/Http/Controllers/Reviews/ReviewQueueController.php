@@ -8,27 +8,54 @@ use App\Http\Requests\Reviews\AddToQueueRequest;
 use App\Http\Resources\PaperSummaryResource;
 use App\Models\Paper;
 use App\Models\ReviewQueue;
+use App\Support\ResolvesApiScope;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Log;
 
 class ReviewQueueController extends Controller
 {
-    use OwnerAuthorizes;
+    use OwnerAuthorizes, ResolvesApiScope;
 
     public function index(Request $request)
     {
-        $userId = $request->user()->id ?? abort(401, 'Unauthenticated');
+        $request->user() ?? abort(401, 'Unauthenticated');
 
+        Log::info('ReviewQueue index called', [
+            'user_id' => $request->user()->id,
+            'role' => $request->user()->role
+        ]);
+
+        // Get all accessible user IDs based on role and relationships
+        $userIds = $this->resolveApiUserIds($request);
+
+        Log::info('Accessible user IDs resolved', [
+            'user_ids' => $userIds,
+            'count' => count($userIds)
+        ]);
+
+        // Query review queue for all accessible users
         $rows = ReviewQueue::with([
-                'paper' => fn ($q) => $q->where('created_by', $userId),
-                'paper.reviews' => function ($q) use ($userId) {
-                    $q->where('user_id', $userId);
+                'paper' => fn ($q) => $q
+                    ->whereIn('created_by', $userIds)
+                    ->with('creator:id,name,email,role'),
+                'paper.reviews' => function ($q) use ($userIds) {
+                    $q->whereIn('user_id', $userIds);
                 }
             ])
-            ->where('user_id', $userId)
-            ->whereHas('paper', fn ($q) => $q->where('created_by', $userId)) // enforce ownership
-            ->orderByDesc('added_at')
+            ->whereIn('user_id', $userIds)
+            ->whereHas('paper', fn ($q) => $q->whereIn('created_by', $userIds))
             ->get()
-            ->map(fn ($rq) => $rq->paper);
+            ->map(fn ($rq) => $rq->paper)
+            ->filter()
+            // ->sortByDesc('updated_at') // ✅ THIS FIXES IT
+            ->sortBy('id')
+            ->values();
+
+
+
+        Log::info('ReviewQueue rows retrieved', [
+            'count' => $rows->count()
+        ]);
 
         return PaperSummaryResource::collection($rows);
     }
@@ -38,28 +65,58 @@ class ReviewQueueController extends Controller
         $userId  = $request->user()->id ?? abort(401, 'Unauthenticated');
         $paperId = (int) $request->input('paperId');
 
-        // Ensure paper exists and is owned by current user
-        $paper = Paper::findOrFail($paperId);
-        $this->authorizeOwner($paper, 'created_by');
+        Log::info('Adding paper to review queue', [
+            'user_id' => $userId,
+            'paper_id' => $paperId
+        ]);
 
+        // Ensure paper exists
+        $paper = Paper::findOrFail($paperId);
+
+        // Check if user has access to this paper's owner
+        $this->authorizeUserAccess($request, $paper->created_by);
+
+        Log::info('User authorized to access paper', [
+            'user_id' => $userId,
+            'paper_id' => $paperId,
+            'paper_owner' => $paper->created_by
+        ]);
+
+        // Add to queue for the current user
         ReviewQueue::firstOrCreate(
             ['user_id' => $userId, 'paper_id' => $paper->id],
             ['added_at' => now()]
         );
 
-        // Return the paper summary for immediate UI prepend (with this user's review status)
-        $paper->load(['reviews' => fn ($q) => $q->where('user_id', $userId)]);
+        Log::info('Paper added to review queue successfully');
+
+        // Return the paper summary with current user's review status and creator
+        $paper->load([
+            'reviews' => fn ($q) => $q->where('user_id', $userId),
+            'creator:id,name,email,role'
+        ]);
+        
         return new PaperSummaryResource($paper);
     }
 
     public function destroy(Request $request, Paper $paper)
     {
         $request->user() ?? abort(401, 'Unauthenticated');
-        $this->authorizeOwner($paper, 'created_by');
 
+        Log::info('Removing paper from review queue', [
+            'user_id' => $request->user()->id,
+            'paper_id' => $paper->id
+        ]);
+
+        // Check if user has access to this paper's owner
+        $this->authorizeUserAccess($request, $paper->created_by);
+
+        // Remove from queue for the current user
         ReviewQueue::where('user_id', $request->user()->id)
             ->where('paper_id', $paper->id)
             ->delete();
+
+        Log::info('Paper removed from review queue successfully');
 
         return response()->noContent();
     }

@@ -12,12 +12,21 @@ return Application::configure(basePath: dirname(__DIR__))
         health: '/up',
     )
     ->withMiddleware(function (Middleware $middleware): void {
-        // you can add middleware config here if needed
-        // e.g. $middleware->api([...]);
+        // Ensure CORS middleware is applied to web routes (for file serving)
+        $middleware->web(append: [
+            \Illuminate\Http\Middleware\HandleCors::class,
+        ]);
+        
+        // Also ensure it's on API routes
+        $middleware->api(prepend: [
+            \Illuminate\Http\Middleware\HandleCors::class,
+        ]);
+        
+        // Register middleware aliases
         $middleware->alias([
             'role' => \App\Http\Middleware\EnsureRole::class,
-            'check.trial' => \App\Http\Middleware\CheckTrialStatus::class, // <-- add this
-
+            'check.trial' => \App\Http\Middleware\CheckTrialStatus::class,
+            'cors' => \Illuminate\Http\Middleware\HandleCors::class, // Add this for explicit usage
         ]);
     })
     ->withExceptions(function (Exceptions $exceptions): void {

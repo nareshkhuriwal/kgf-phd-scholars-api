@@ -30,7 +30,7 @@ class ROLController extends Controller
 
         $map = fn(Paper $p) => [
             'Paper ID'                                      => $p->paper_code,
-            'Litracture Review'                             => $p->review_html,
+            'Literature Review'                             => $p->review_html,
             'Category of Paper'                             => $p->category,
             'DOI'                                           => $p->doi,
             'Author(s)'                                     => $p->authors,
@@ -63,7 +63,7 @@ class ROLController extends Controller
         $rows = $this->rows($req);
 
         $headers = array_keys($rows[0] ?? [
-            'Paper ID'=>null,'Litracture Review'=>null,'Category of Paper'=>null,'DOI'=>null,'Author(s)'=>null,
+            'Paper ID'=>null,'Literature Review'=>null,'Category of Paper'=>null,'DOI'=>null,'Author(s)'=>null,
             'Year'=>null,'Title'=>null,'Name of Journal/Conference'=>null,'ISSN / ISBN'=>null,
             'Name of Publisher / Organization'=>null,'Place of Conference'=>null,'Volume'=>null,'Issue'=>null,
             'Page No'=>null,'Area / Sub Area'=>null,'Key Issue'=>null,'Solution Approach / Methodology used'=>null,
@@ -112,7 +112,7 @@ class ROLController extends Controller
             }
             // We keep the main review first; then other fields if present:
             $fields = [
-                'Litracture Review','Key Issue','Solution Approach / Methodology used','Related Work',
+                'Literature Review','Key Issue','Solution Approach / Methodology used','Related Work',
                 'Input Parameters used','Hardware / Software / Technology Used','Results','Key advantages','Limitations','Remarks'
             ];
             foreach ($fields as $f) {

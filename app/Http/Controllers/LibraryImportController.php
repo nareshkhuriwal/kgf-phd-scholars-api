@@ -1,4 +1,5 @@
 <?php
+
 namespace App\Http\Controllers;
 
 use Illuminate\Http\Request;
@@ -9,9 +10,28 @@ use Illuminate\Support\Str;
 use Symfony\Component\HttpFoundation\Response;
 use App\Models\Paper;
 use League\Csv\Reader; // composer require league/csv
+use Symfony\Component\HttpFoundation\StreamedResponse;
 
 class LibraryImportController extends Controller
 {
+
+    private const CSV_FIELD_MAP = [
+        'paper_code' => 'paper_code',
+        'doi'        => 'doi',
+        'authors'    => 'authors',
+        'year'       => 'year',
+        'title'      => 'title',
+        'journal'    => 'journal',
+        'issn_isbn'  => 'issn_isbn',
+        'publisher'  => 'publisher',
+        'place'      => 'place',
+        'area'       => 'area',
+        'volume'     => 'volume',
+        'issue'      => 'issue',
+        'page_no'    => 'page_no',
+        'category'   => 'category',
+    ];
+
     /**
      * POST /api/library/import
      * FormData:  files[] (PDFs etc), csv (optional), meta(JSON) => { sources:{ urls:[], bibtex:string } }
@@ -140,37 +160,93 @@ class LibraryImportController extends Controller
         $csvFile = null;
         $sources = ['urls' => [], 'bibtex' => ''];
 
-        if ($request->isMethod('post') && Str::startsWith($request->header('Content-Type', ''), 'multipart/form-data')) {
-            // Multipart: files[], csv, meta(JSON)
+        // ---------------- Multipart/FormData ----------------
+        if (
+            $request->isMethod('post') &&
+            Str::startsWith($request->header('Content-Type', ''), 'multipart/form-data')
+        ) {
+            // Files[]
             if ($request->hasFile('files')) {
                 $request->validate([
-                    'files'   => ['array','min:1'],
-                    'files.*' => ['file','max:51200'], // 50MB (KB)
+                    'files'   => ['array', 'min:1'],
+                    'files.*' => ['file', 'max:51200'], // 50 MB
                 ]);
                 $files = $request->file('files', []);
             }
+
+            // CSV
             if ($request->hasFile('csv')) {
-                $request->validate(['csv' => ['file','mimes:csv,txt','max:20480']]);
+                $request->validate([
+                    'csv' => ['file', 'mimes:csv,txt', 'max:20480'], // 20 MB
+                ]);
                 $csvFile = $request->file('csv');
             }
+
+            // meta JSON (optional)
             $meta = [];
             if ($request->filled('meta')) {
-                $meta = json_decode((string)$request->input('meta'), true) ?: [];
+                $meta = json_decode((string) $request->input('meta'), true) ?: [];
             }
-            $sources['urls']   = array_values(array_filter(array_map('trim', $meta['sources']['urls'] ?? [])));
-            $sources['bibtex'] = trim($meta['sources']['bibtex'] ?? '');
 
-        } else {
-            // JSON body
+            // URLs may come directly OR inside meta.sources
+            $directUrlsRaw = $request->input('urls', []);
+
+            // urls may arrive as:
+            // 1) array
+            // 2) JSON string: '["url1","url2"]'
+            // 3) plain string with newlines
+            $directUrls = [];
+
+            if (is_array($directUrlsRaw)) {
+                $directUrls = $directUrlsRaw;
+            } elseif (is_string($directUrlsRaw)) {
+                $decoded = json_decode($directUrlsRaw, true);
+                if (is_array($decoded)) {
+                    $directUrls = $decoded;
+                } else {
+                    // fallback: treat as newline-separated textarea
+                    $directUrls = preg_split('/\r\n|\r|\n/', $directUrlsRaw);
+                }
+            }
+            $metaUrls   = $meta['sources']['urls'] ?? [];
+
+            $allUrls = array_merge(
+                is_array($directUrls) ? $directUrls : [],
+                is_array($metaUrls)   ? $metaUrls   : []
+            );
+
+            $sources['urls'] = array_values(array_unique(
+                array_filter(
+                    array_map('trim', $allUrls),
+                    fn ($u) => is_string($u) && $u !== ''
+                )
+            ));
+
+            $sources['bibtex'] = is_string($meta['sources']['bibtex'] ?? null)
+                ? trim($meta['sources']['bibtex'])
+                : '';
+        }
+
+        // ---------------- JSON Body ----------------
+        else {
             $payload = $request->json()->all();
-            $urls    = $payload['sources']['urls']   ?? [];
-            $bibtex  = $payload['sources']['bibtex'] ?? '';
-            $sources['urls']   = array_values(array_filter(array_map('trim', is_array($urls) ? $urls : [])));
-            $sources['bibtex'] = is_string($bibtex) ? trim($bibtex) : '';
+
+            $urls = $payload['sources']['urls'] ?? [];
+            $bib  = $payload['sources']['bibtex'] ?? '';
+
+            $sources['urls'] = array_values(array_unique(
+                array_filter(
+                    array_map('trim', is_array($urls) ? $urls : []),
+                    fn ($u) => is_string($u) && $u !== ''
+                )
+            ));
+
+            $sources['bibtex'] = is_string($bib) ? trim($bib) : '';
         }
 
         return [$files, $csvFile, $sources];
     }
+
 
     /* ---------------- Files (Option-B) ---------------- */
 
@@ -235,7 +311,7 @@ class LibraryImportController extends Controller
         $name   = basename(parse_url($url, PHP_URL_PATH) ?: 'download');
         if (!Str::contains($name, '.')) $name .= ".{$ext}";
 
-        $path = "library/{$subdir}/".Str::random(10)."_".$name;
+        $path = "library/{$subdir}/" . Str::random(10) . "_" . $name;
         Storage::disk($disk)->put($path, $bytes);
 
         // Create Paper first
@@ -290,7 +366,7 @@ class LibraryImportController extends Controller
     private function parseBibtex(string $bib): array
     {
         $entries = [];
-        foreach (preg_split('/\n@/i', "\n".$bib) as $chunk) {
+        foreach (preg_split('/\n@/i', "\n" . $bib) as $chunk) {
             $chunk = trim($chunk);
             if ($chunk === '') continue;
             $title   = $this->matchField($chunk, 'title');
@@ -319,12 +395,15 @@ class LibraryImportController extends Controller
             if (preg_match('/^TY\s*-\s*/', $line)) $current = [];
             if (preg_match('/^TI\s*-\s*(.*)$/', $line, $m)) $current['title'] = trim($m[1]);
             if (preg_match('/^AU\s*-\s*(.*)$/', $line, $m)) {
-                $current['authors'] = trim(($current['authors'] ?? '').'; '.$m[1], '; ');
+                $current['authors'] = trim(($current['authors'] ?? '') . '; ' . $m[1], '; ');
             }
             if (preg_match('/^PY\s*-\s*(\d{4})/', $line, $m)) $current['year'] = $m[1];
             if (preg_match('/^DO\s*-\s*(.*)$/', $line, $m)) $current['doi'] = trim($m[1]);
             if (preg_match('/^UR\s*-\s*(.*)$/', $line, $m)) $current['url'] = trim($m[1]);
-            if (preg_match('/^ER\s*-\s*/', $line)) { $entries[] = $current; $current = []; }
+            if (preg_match('/^ER\s*-\s*/', $line)) {
+                $entries[] = $current;
+                $current = [];
+            }
         }
         if (!empty($current)) $entries[] = $current;
         return $entries;
@@ -332,7 +411,7 @@ class LibraryImportController extends Controller
 
     private function matchField(string $chunk, string $field): string
     {
-        if (preg_match('/'.$field.'\s*=\s*[{"]([^}"]+)[}"]/i', $chunk, $m)) return trim($m[1]);
+        if (preg_match('/' . $field . '\s*=\s*[{"]([^}"]+)[}"]/i', $chunk, $m)) return trim($m[1]);
         return '';
     }
 
@@ -367,7 +446,7 @@ class LibraryImportController extends Controller
                     $disk   = 'uploads';
                     $subdir = now()->format('Y/m');
                     $orig   = basename(parse_url($e['pdf_url'], PHP_URL_PATH) ?: 'paper.pdf');
-                    $path   = "library/{$subdir}/".Str::random(10)."_".$orig;
+                    $path   = "library/{$subdir}/" . Str::random(10) . "_" . $orig;
 
                     Storage::disk($disk)->put($path, $bytes);
 
@@ -399,12 +478,17 @@ class LibraryImportController extends Controller
     {
         $reader = Reader::createFromPath($csvFile->getRealPath(), 'r');
         $reader->setHeaderOffset(0);
-        $created = []; $skipped = []; $errors = [];
+        $created = [];
+        $skipped = [];
+        $errors = [];
 
         foreach ($reader->getRecords() as $row) {
             try {
                 $title = trim($row['title'] ?? '');
-                if ($title === '') { $skipped[] = ['row' => $row, 'reason' => 'Missing title']; continue; }
+                if ($title === '') {
+                    $skipped[] = ['row' => $row, 'reason' => 'Missing title'];
+                    continue;
+                }
 
                 // 1) Create paper first
                 $paper = Paper::create([
@@ -427,7 +511,7 @@ class LibraryImportController extends Controller
                             $disk   = 'uploads';
                             $subdir = now()->format('Y/m');
                             $orig   = basename(parse_url($row['pdf_url'], PHP_URL_PATH) ?: 'paper.pdf');
-                            $path   = "library/{$subdir}/".Str::random(10)."_".$orig;
+                            $path   = "library/{$subdir}/" . Str::random(10) . "_" . $orig;
 
                             Storage::disk($disk)->put($path, $bytes);
 
@@ -442,7 +526,7 @@ class LibraryImportController extends Controller
                             ]);
                         }
                     } catch (\Throwable $e) {
-                        $errors[] = ['row' => $row, 'error' => 'pdf_url fetch failed: '.$e->getMessage()];
+                        $errors[] = ['row' => $row, 'error' => 'pdf_url fetch failed: ' . $e->getMessage()];
                     }
                 }
 
@@ -454,76 +538,132 @@ class LibraryImportController extends Controller
         return [$created, $skipped, $errors];
     }
 
-    /**
-     * CSV importer that respects remaining quota.
-     * $remaining passed by reference and decremented for each created paper.
-     * Returns [$created, $skipped, $errors]
-     */
-    private function importFromCsvWithQuota(Request $request, UploadedFile $csvFile, int &$remaining): array
-    {
-        $reader = Reader::createFromPath($csvFile->getRealPath(), 'r');
-        $reader->setHeaderOffset(0);
-        $created = []; $skipped = []; $errors = [];
+/**
+ * CSV importer that respects remaining quota.
+ * Uses native PHP (fgetcsv) – no external libraries.
+ * Returns [$created, $skipped, $errors]
+ */
+private function importFromCsvWithQuota(Request $request, UploadedFile $csvFile, int &$remaining): array
+{
+    $created = [];
+    $skipped = [];
+    $errors  = [];
 
-        foreach ($reader->getRecords() as $row) {
-            if ($remaining <= 0) {
-                $skipped[] = ['row' => $row, 'reason' => 'Upload quota exceeded for your plan'];
+    if (($handle = fopen($csvFile->getRealPath(), 'r')) === false) {
+        return [[], [], [['error' => 'Unable to open CSV file']]];
+    }
+
+    // Read header row
+    $headers = fgetcsv($handle);
+    if (!$headers || !is_array($headers)) {
+        fclose($handle);
+        return [[], [], [['error' => 'Invalid or empty CSV header']]];
+    }
+
+    // Normalize headers (trim + lowercase)
+    $headers = array_map(
+        fn ($h) => strtolower(trim((string)$h)),
+        $headers
+    );
+
+    $rowNumber = 1; // header row
+
+    while (($row = fgetcsv($handle)) !== false) {
+        $rowNumber++;
+
+        if ($remaining <= 0) {
+            $skipped[] = ['row' => $rowNumber, 'reason' => 'Upload quota exceeded for your plan'];
+            continue;
+        }
+
+        // Skip empty lines
+        if (count(array_filter($row, fn ($v) => trim((string)$v) !== '')) === 0) {
+            continue;
+        }
+
+        // Combine header → row
+        if (count($headers) !== count($row)) {
+            $errors[] = [
+                'row'   => $rowNumber,
+                'error' => 'Column count mismatch',
+            ];
+            continue;
+        }
+
+        $rowData = array_combine($headers, $row);
+
+        try {
+            // Build Paper data
+            $data = [
+                'created_by' => $request->user()->id ?? null,
+                'source'     => 'csv',
+            ];
+
+            foreach (self::CSV_FIELD_MAP as $csvKey => $dbColumn) {
+                if (isset($rowData[$csvKey]) && trim((string)$rowData[$csvKey]) !== '') {
+                    $data[$dbColumn] = trim((string)$rowData[$csvKey]);
+                }
+            }
+
+            if (empty($data['title'])) {
+                $skipped[] = [
+                    'row'    => $rowNumber,
+                    'reason' => 'Missing title',
+                ];
                 continue;
             }
 
-            try {
-                $title = trim($row['title'] ?? '');
-                if ($title === '') { $skipped[] = ['row' => $row, 'reason' => 'Missing title']; continue; }
+            // Create Paper
+            $paper = Paper::create($data);
 
-                // 1) Create paper first
-                $paper = Paper::create([
-                    'title'      => $title,
-                    'authors'    => $row['authors'] ?? null,
-                    'year'       => $row['year'] ?? null,
-                    'doi'        => $row['doi'] ?? null,
-                    'url'        => $row['url'] ?? null,
-                    'created_by' => $request->user()->id ?? null,
-                    'source'     => 'csv',
-                ]);
+            // Optional PDF attachment
+            if (!empty($rowData['pdf_url'])) {
+                try {
+                    $resp = Http::timeout(20)->get(trim($rowData['pdf_url']));
+                    if ($resp->ok() && strlen($resp->body())) {
+                        $bytes  = $resp->body();
+                        $mime   = $resp->header('Content-Type', 'application/pdf');
+                        $disk   = 'uploads';
+                        $subdir = now()->format('Y/m');
+                        $orig   = basename(parse_url($rowData['pdf_url'], PHP_URL_PATH) ?: 'paper.pdf');
+                        $path   = "library/{$subdir}/" . Str::random(10) . "_" . $orig;
 
-                // 2) Fetch and attach pdf_url if present
-                if (!empty($row['pdf_url'])) {
-                    try {
-                        $resp = Http::timeout(20)->get($row['pdf_url']);
-                        if ($resp->ok() && strlen($resp->body())) {
-                            $bytes  = $resp->body();
-                            $mime   = $resp->header('Content-Type', 'application/pdf');
-                            $disk   = 'uploads';
-                            $subdir = now()->format('Y/m');
-                            $orig   = basename(parse_url($row['pdf_url'], PHP_URL_PATH) ?: 'paper.pdf');
-                            $path   = "library/{$subdir}/".Str::random(10)."_".$orig;
+                        Storage::disk($disk)->put($path, $bytes);
 
-                            Storage::disk($disk)->put($path, $bytes);
-
-                            $paper->files()->create([
-                                'disk'          => $disk,
-                                'path'          => $path,
-                                'original_name' => $orig,
-                                'mime'          => $mime,
-                                'size_bytes'    => strlen($bytes),
-                                'checksum'      => hash('sha256', $bytes),
-                                'uploaded_by'   => $request->user()->id ?? null,
-                            ]);
-                        }
-                    } catch (\Throwable $e) {
-                        $errors[] = ['row' => $row, 'error' => 'pdf_url fetch failed: '.$e->getMessage()];
+                        $paper->files()->create([
+                            'disk'          => $disk,
+                            'path'          => $path,
+                            'original_name' => $orig,
+                            'mime'          => $mime,
+                            'size_bytes'    => strlen($bytes),
+                            'checksum'      => hash('sha256', $bytes),
+                            'uploaded_by'   => $request->user()->id ?? null,
+                        ]);
                     }
+                } catch (\Throwable $e) {
+                    $errors[] = [
+                        'row'   => $rowNumber,
+                        'error' => 'pdf_url fetch failed: ' . $e->getMessage(),
+                    ];
                 }
-
-                $created[] = $paper->fresh('files');
-                $remaining--;
-            } catch (\Throwable $e) {
-                $errors[] = ['row' => $row, 'error' => $e->getMessage()];
             }
-        }
 
-        return [$created, $skipped, $errors];
+            $created[] = $paper->fresh('files');
+            $remaining--;
+
+        } catch (\Throwable $e) {
+            $errors[] = [
+                'row'   => $rowNumber,
+                'error' => $e->getMessage(),
+            ];
+        }
     }
+
+    fclose($handle);
+
+    return [$created, $skipped, $errors];
+}
+
 
     /* ---------------- Helpers ---------------- */
 
@@ -533,5 +673,57 @@ class LibraryImportController extends Controller
         $base = preg_replace('/[_\-]+/', ' ', $base);
         $base = trim($base);
         return Str::title($base ?: 'Untitled');
+    }
+
+
+
+    public function csvTemplate(): StreamedResponse
+    {
+        $headers = [
+            'paper_code',
+            'doi',
+            'authors',
+            'year',
+            'title',
+            'journal',
+            'issn_isbn',
+            'publisher',
+            'place',
+            'area',
+            'volume',
+            'issue',
+            'page_no',
+            'category',
+        ];
+
+        $rows = [
+            [
+                'QEC-1995-001',
+                '10.1109/SFCS.1995.492461',
+                'Shor, Peter W.; Steane, Andrew',
+                '1995',
+                'Quantum Error Correction for Beginners',
+                'Proceedings of IEEE Symposium on Foundations of Computer Science',
+                '1063-6900',
+                'IEEE',
+                'Los Alamitos',
+                'Quantum Computing / Error Correction',
+                '36',
+                '1',
+                '56-65',
+                'Conference Paper',
+            ],
+        ];
+
+        return response()->streamDownload(function () use ($headers, $rows) {
+            $handle = fopen('php://output', 'w');
+            fputcsv($handle, $headers);
+            foreach ($rows as $row) {
+                fputcsv($handle, $row);
+            }
+            fclose($handle);
+        }, 'papers_import_sample.csv', [
+            'Content-Type' => 'text/csv',
+        ]);
     }
 }
