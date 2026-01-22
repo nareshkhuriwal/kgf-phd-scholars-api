@@ -12,6 +12,7 @@ use App\Http\Controllers\Concerns\OwnerAuthorizes;
 use App\Support\ResolvesDashboardScope;
 use App\Support\ResolvesApiScope;
 use App\Models\User;
+use App\Models\Paper;
 
 class DashboardController extends Controller
 {
