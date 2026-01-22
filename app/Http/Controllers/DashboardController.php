@@ -12,14 +12,14 @@ use App\Http\Controllers\Concerns\OwnerAuthorizes;
 use App\Support\ResolvesDashboardScope;
 use App\Support\ResolvesApiScope;
 use App\Models\User;
-use App\Models\Paper;
 
 class DashboardController extends Controller
 {
     use OwnerAuthorizes, ResolvesDashboardScope, ResolvesApiScope;
 
     /**
-     * Summary statistics for dashboard.
+     * KPIs + weekly series (last N ISO weeks).
+     * Role/scope aware via ?scope=&user_id=
      */
     public function summary(Request $req)
     {
@@ -27,16 +27,16 @@ class DashboardController extends Controller
 
         Log::info('Dashboard summary called', [
             'user_id' => $req->user()->id,
-            'role'    => $req->user()->role,
-            'scope'   => $req->query('scope', 'self'),
+            'role' => $req->user()->role,
+            'scope' => $req->query('scope', 'self')
         ]);
 
-        // Resolve user scope
+        // resolve which user IDs to aggregate over
         $userIds = $this->resolveDashboardUserIds($req);
 
         Log::info('Dashboard user IDs resolved', [
             'user_ids' => $userIds,
-            'count'    => count($userIds),
+            'count' => count($userIds)
         ]);
 
         if (empty($userIds)) {
@@ -50,8 +50,18 @@ class DashboardController extends Controller
                         'archived'       => 0,
                         'collections'    => 0,
                     ],
-                    'weekly'  => [],
-                    'yearly'  => [],
+                    'weekly' => [
+                        'labels'   => [],
+                        'added'    => [],
+                        'reviewed' => [],
+                        'started'  => [],
+                        'efficiency' => [],
+                    ],
+                    'yearly' => [
+                        'labels'   => [],
+                        'counts'   => [],
+                        'percents' => [],
+                    ],
                     'derived' => [
                         'reviewCompletionRate' => 0,
                         'queuePressure'        => 0,
@@ -60,40 +70,36 @@ class DashboardController extends Controller
             ]);
         }
 
-        /* =======================
-     * TOTALS (ARCHIVED INCLUDED)
-     * ======================= */
+        // ----- Totals -----
+        $totalPapers  = DB::table('papers')->whereIn('created_by', $userIds)->count();
 
-        $totalPapers = Paper::withoutGlobalScopes()
-            ->whereIn('created_by', $userIds)
-            ->count();
-
-        $archivedPapers = Paper::withoutGlobalScopes()
-            ->whereIn('created_by', $userIds)
-            ->where('review_status', 'archived')
-            ->count();
-
-        $reviewed = DB::table('reviews')
+        // Reviews table should have: user_id, status ('done'|'pending'|...)
+        $reviewed     = DB::table('reviews')
             ->whereIn('user_id', $userIds)
             ->where('status', 'done')
             ->count();
 
-        $started = DB::table('reviews')
+        $started      = DB::table('reviews')
             ->whereIn('user_id', $userIds)
             ->where('status', '!=', 'done')
             ->count();
 
-        // In queue = papers without completed or started review
+        $archived = DB::table('papers')
+            ->whereIn('created_by', $userIds)
+            ->where('review_status', 'archived')
+            ->count();
+
+
+        // If you have a dedicated queue table, use it; otherwise "in queue" = papers with no review row
         $inQueue = max($totalPapers - $reviewed - $started, 0);
 
-        $collections = DB::table('collections')
+        $collections  = DB::table('collections')
             ->whereIn('user_id', $userIds)
             ->count();
 
         /* =======================
-     * DERIVED KPIs
-     * ======================= */
-
+         * DERIVED KPIs (NEW)
+         * ======================= */
         $reviewCompletionRate = $totalPapers > 0
             ? round(($reviewed / $totalPapers) * 100, 1)
             : 0;
@@ -102,43 +108,41 @@ class DashboardController extends Controller
             ? round(($inQueue / $totalPapers) * 100, 1)
             : 0;
 
-        /* =======================
-     * YEAR-WISE (ARCHIVED INCLUDED)
-     * ======================= */
-
-        $yearStatsRaw = Paper::withoutGlobalScopes()
+        // ----- Year-wise Paper Stats (from papers.year column) -----
+        $yearStatsRaw = DB::table('papers')
             ->select('year', DB::raw('COUNT(*) as total'))
             ->whereIn('created_by', $userIds)
             ->whereNotNull('year')
-            ->whereBetween('year', [1900, now()->year])
+            ->whereBetween('year', [1900, now()->year]) // FIX
             ->groupBy('year')
             ->orderBy('year')
             ->get();
 
-        $yearLabels   = [];
-        $yearCounts   = [];
+
+        $yearLabels = [];
+        $yearCounts = [];
         $yearPercents = [];
 
         foreach ($yearStatsRaw as $row) {
-            $yearLabels[]   = (string) $row->year;
-            $yearCounts[]   = (int) $row->total;
+            $yearLabels[] = (string) $row->year;
+            $yearCounts[] = (int) $row->total;
             $yearPercents[] = $totalPapers > 0
                 ? round(($row->total / $totalPapers) * 100, 1)
                 : 0;
         }
 
-        /* =======================
-     * WEEKLY / MONTHLY
-     * ======================= */
-
+        // ----- Weekly (last 8 ISO weeks, Monday start) -----
+        // ----- Weekly Review Efficiency (with Monthly fallback) -----
         $weeksBack = (int) $req->query('weeks', 8);
 
-        // These helper methods MUST also use Paper::withoutGlobalScopes()
+        // get full weekly data (assoc)
         $weekly = $this->weeklyAddedVsReviewed($userIds, $weeksBack, true);
 
-        $hasWeeklyEfficiency = collect($weekly['efficiency'] ?? [])->sum() > 0;
+        // detect if weekly efficiency is meaningful
+        $hasWeeklyEfficiency = collect($weekly['efficiency'])->sum() > 0;
 
         if (!$hasWeeklyEfficiency) {
+            // 🔁 FALLBACK → Monthly efficiency
             $monthly = $this->monthlyReviewEfficiency($userIds);
 
             $weekly = [
@@ -154,9 +158,8 @@ class DashboardController extends Controller
 
         Log::info('Dashboard summary generated', [
             'total_papers' => $totalPapers,
-            'archived'     => $archivedPapers,
-            'reviewed'     => $reviewed,
-            'collections'  => $collections,
+            'reviewed' => $reviewed,
+            'collections' => $collections
         ]);
 
         return response()->json([
@@ -166,7 +169,7 @@ class DashboardController extends Controller
                     'reviewedPapers' => $reviewed,
                     'inQueue'        => $inQueue,
                     'started'        => $started,
-                    'archived'       => $archivedPapers,
+                    'archived'       => $archived,
                     'collections'    => $collections,
                 ],
                 'yearly' => [
@@ -179,11 +182,11 @@ class DashboardController extends Controller
                     'queuePressure'        => $queuePressure,
                 ],
                 'weekly' => $weekly,
+                // optional: category distribution if you keep a category field on papers
                 'byCreatedBy' => $this->byCategoryForPaperCategory($userIds),
-            ],
+            ]
         ]);
     }
-
 
     /**
      * Daily series for the last N days (default 30).
