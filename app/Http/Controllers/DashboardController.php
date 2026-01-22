@@ -71,27 +71,39 @@ class DashboardController extends Controller
         }
 
         // ----- Totals -----
-        $totalPapers  = DB::table('papers')->whereIn('created_by', $userIds)->count();
+        // ----- Totals -----
 
-        // Reviews table should have: user_id, status ('done'|'pending'|...)
-        $reviewed     = DB::table('reviews')
-            ->whereIn('user_id', $userIds)
-            ->where('status', 'done')
+        // 1. Total papers (includes archived)
+        $totalPapers = DB::table('papers')
+            ->whereIn('created_by', $userIds)
             ->count();
 
-        $started      = DB::table('reviews')
-            ->whereIn('user_id', $userIds)
-            ->where('status', '!=', 'done')
-            ->count();
-
+        // 2. Archived papers
         $archived = DB::table('papers')
             ->whereIn('created_by', $userIds)
             ->where('review_status', 'archived')
             ->count();
 
+        // 3. Papers reviewed (distinct papers)
+        $reviewed = DB::table('reviews')
+            ->whereIn('user_id', $userIds)
+            ->where('status', 'done')
+            ->distinct('paper_id')
+            ->count('paper_id');
 
-        // If you have a dedicated queue table, use it; otherwise "in queue" = papers with no review row
-        $inQueue = max($totalPapers - $reviewed - $started, 0);
+        // 4. Papers started (distinct papers, not done)
+        $started = DB::table('reviews')
+            ->whereIn('user_id', $userIds)
+            ->where('status', '!=', 'done')
+            ->distinct('paper_id')
+            ->count('paper_id');
+
+        // 5. Active papers (exclude archived)
+        $activePapers = $totalPapers - $archived;
+
+        // 6. In Queue = active − reviewed − started
+        $inQueue = max($activePapers - $reviewed - $started, 0);
+
 
         $collections  = DB::table('collections')
             ->whereIn('user_id', $userIds)
