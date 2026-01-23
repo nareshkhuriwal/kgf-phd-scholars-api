@@ -5,10 +5,8 @@ namespace App\Http\Controllers;
 use App\Http\Requests\ApplyHighlightsRequest;
 use App\Models\Paper;
 use Illuminate\Support\Facades\Storage;
-use Illuminate\Support\Str;
 use setasign\Fpdi\Tcpdf\Fpdi;
 use App\Http\Controllers\Concerns\OwnerAuthorizes;
-use Illuminate\Http\Request;
 use App\Http\Controllers\Concerns\ResolvesPublicUploads;
 use App\Services\AuditLogger;
 
@@ -18,7 +16,7 @@ class PdfHighlightController extends Controller
     use ResolvesPublicUploads;
 
     /* ---------------------------------------------------------
-     * HELPERS
+     * HELPERS (existing)
      * --------------------------------------------------------- */
 
     private function clamp01($v): ?float
@@ -74,7 +72,112 @@ class PdfHighlightController extends Controller
     }
 
     /* ---------------------------------------------------------
-     * APPLY HIGHLIGHTS (MAIN FIXED METHOD)
+     * NEW HELPERS (dedupe + style normalization)
+     * --------------------------------------------------------- */
+
+    /**
+     * Normalize style fields to stable values so dedupe works reliably.
+     * Keeps existing behavior defaults: yellow + alpha 0.25.
+     */
+    private function normalizeStyle($style): array
+    {
+        $style = is_array($style) ? $style : [];
+
+        $color = (string)($style['color'] ?? '#FFEB3B');
+        $color = strtoupper($color);
+        if ($color !== '' && $color[0] !== '#') {
+            $color = '#' . $color;
+        }
+
+        // Validate #RRGGBB; fallback to default yellow if invalid
+        if (!preg_match('/^#[0-9A-F]{6}$/', $color)) {
+            $color = '#FFEB3B';
+        }
+
+        $alpha = $this->clamp($style['alpha'] ?? 0.25, 0.0, 1.0);
+
+        return ['color' => $color, 'alpha' => $alpha];
+    }
+
+    /**
+     * Quantize normalized floats (0..1) so "almost equal" rects dedupe.
+     * Default q=10000 => 1e-4 precision in normalized coordinates.
+     */
+    private function q(?float $v, int $q = 10000): ?int
+    {
+        if ($v === null) return null;
+        return (int) round($v * $q);
+    }
+
+    /**
+     * Create stable dedupe key for a highlight rectangle.
+     * Includes style so different colors/alpha do not collide.
+     */
+    private function rectKey(int $page, array $rect, array $style): string
+    {
+        return implode(':', [
+            $page,
+            $this->q($rect['x']),
+            $this->q($rect['y']),
+            $this->q($rect['w']),
+            $this->q($rect['h']),
+            $style['color'],
+            $this->q((float)$style['alpha'], 1000), // alpha quantization
+        ]);
+    }
+
+    /**
+     * Ensure only one highlight is applied at the same position.
+     * If duplicates exist, keep a single rect; to avoid dark rendering,
+     * keep the LOWEST alpha among duplicates.
+     */
+    private function dedupeRectsByPage(array $cleanByPage): array
+    {
+        $out = [];
+
+        foreach ($cleanByPage as $page => $rects) {
+            $seen = [];
+
+            foreach ($rects as $r) {
+                // Ensure fields exist
+                if (!isset($r['x'], $r['y'], $r['w'], $r['h'])) continue;
+
+                $style = $this->normalizeStyle($r['style'] ?? null);
+
+                $rect = [
+                    'x' => (float)$r['x'],
+                    'y' => (float)$r['y'],
+                    'w' => (float)$r['w'],
+                    'h' => (float)$r['h'],
+                ];
+
+                $key = $this->rectKey((int)$page, $rect, $style);
+
+                if (!isset($seen[$key])) {
+                    $seen[$key] = [
+                        'x' => $rect['x'],
+                        'y' => $rect['y'],
+                        'w' => $rect['w'],
+                        'h' => $rect['h'],
+                        'style' => $style,
+                    ];
+                } else {
+                    // If same key repeats, keep lightest alpha to prevent darkening
+                    $existingAlpha = (float)($seen[$key]['style']['alpha'] ?? 1.0);
+                    if ($style['alpha'] < $existingAlpha) {
+                        $seen[$key]['style']['alpha'] = $style['alpha'];
+                    }
+                }
+            }
+
+            $out[(int)$page] = array_values($seen);
+        }
+
+        return $out;
+    }
+
+    /* ---------------------------------------------------------
+     * APPLY HIGHLIGHTS (main)
      * --------------------------------------------------------- */
 
     public function apply(ApplyHighlightsRequest $request, Paper $paper)
@@ -108,7 +211,7 @@ class PdfHighlightController extends Controller
             $replace = $request->boolean('replace', false);
 
             // -----------------------------------------------------
-            // NORMALIZE HIGHLIGHTS
+            // NORMALIZE HIGHLIGHTS (same behavior as before)
             // -----------------------------------------------------
             $cleanByPage = [];
             $MAX_RECTS = 2000;
@@ -161,8 +264,11 @@ class PdfHighlightController extends Controller
                 throw new \InvalidArgumentException('No valid highlights');
             }
 
+            // ✅ NEW: DEDUPE so the same position is highlighted only once
+            $cleanByPage = $this->dedupeRectsByPage($cleanByPage);
+
             // -----------------------------------------------------
-            // OUTPUT PATH
+            // OUTPUT PATH (unchanged)
             // -----------------------------------------------------
             $dir   = trim(dirname($srcPath), '/');
             $base  = pathinfo($srcPath, PATHINFO_FILENAME);
@@ -176,7 +282,7 @@ class PdfHighlightController extends Controller
             $absOut = Storage::disk($srcDisk)->path($outRel);
 
             // -----------------------------------------------------
-            // RENDER PDF
+            // RENDER PDF (minimal changes: use normalized style)
             // -----------------------------------------------------
             $pdf = new Fpdi();
             $pageCount = $pdf->setSourceFile($absIn);
@@ -189,9 +295,9 @@ class PdfHighlightController extends Controller
                 $pdf->useTemplate($tplIdx);
 
                 foreach ($cleanByPage[$pageNo] ?? [] as $rect) {
-                    $style = $rect['style'] ?? [];
-                    $color = $style['color'] ?? '#FFEB3B';
-                    $alpha = $this->clamp($style['alpha'] ?? 0.25, 0.0, 1.0);
+                    $style = $this->normalizeStyle($rect['style'] ?? null);
+                    $color = $style['color'];
+                    $alpha = $style['alpha'];
 
                     [$r, $g, $b] = $this->hexToRgb($color);
 
