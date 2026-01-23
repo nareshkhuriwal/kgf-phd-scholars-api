@@ -5,10 +5,8 @@ namespace App\Http\Controllers;
 use App\Http\Requests\ApplyHighlightsRequest;
 use App\Models\Paper;
 use Illuminate\Support\Facades\Storage;
-use Illuminate\Support\Str;
 use setasign\Fpdi\Tcpdf\Fpdi;
 use App\Http\Controllers\Concerns\OwnerAuthorizes;
-use Illuminate\Http\Request;
 use App\Http\Controllers\Concerns\ResolvesPublicUploads;
 use App\Services\AuditLogger;
 
@@ -18,7 +16,7 @@ class PdfHighlightController extends Controller
     use ResolvesPublicUploads;
 
     /* ---------------------------------------------------------
-     * HELPERS
+     * HELPERS (existing)
      * --------------------------------------------------------- */
 
     private function clamp01($v): ?float
@@ -74,7 +72,230 @@ class PdfHighlightController extends Controller
     }
 
     /* ---------------------------------------------------------
-     * APPLY HIGHLIGHTS (MAIN FIXED METHOD)
+     * NEW HELPERS (dedupe + style normalization)
+     * --------------------------------------------------------- */
+
+    /**
+     * Normalize style fields to stable values so dedupe works reliably.
+     * Keeps existing behavior defaults: yellow + alpha 0.25.
+     */
+    private function normalizeStyle($style): array
+    {
+        $style = is_array($style) ? $style : [];
+
+        $color = (string)($style['color'] ?? '#FFEB3B');
+        $color = strtoupper($color);
+        if ($color !== '' && $color[0] !== '#') {
+            $color = '#' . $color;
+        }
+
+        // Validate #RRGGBB; fallback to default yellow if invalid
+        if (!preg_match('/^#[0-9A-F]{6}$/', $color)) {
+            $color = '#FFEB3B';
+        }
+
+        $alpha = $this->clamp($style['alpha'] ?? 0.25, 0.0, 1.0);
+
+        return ['color' => $color, 'alpha' => $alpha];
+    }
+
+    /**
+     * Quantize normalized floats (0..1) so "almost equal" rects dedupe.
+     * Default q=10000 => 1e-4 precision in normalized coordinates.
+     */
+    private function q(?float $v, int $q = 10000): ?int
+    {
+        if ($v === null) return null;
+        return (int) round($v * $q);
+    }
+
+    /**
+     * Create stable dedupe key for a highlight rectangle.
+     * Includes style so different colors/alpha do not collide.
+     */
+    private function rectKey(int $page, array $rect, array $style): string
+    {
+        return implode(':', [
+            $page,
+            $this->q($rect['x']),
+            $this->q($rect['y']),
+            $this->q($rect['w']),
+            $this->q($rect['h']),
+            $style['color'],
+            $this->q((float)$style['alpha'], 1000), // alpha quantization
+        ]);
+    }
+
+    /**
+     * Ensure only one highlight is applied at the same position.
+     * If duplicates exist, keep a single rect; to avoid dark rendering,
+     * keep the LOWEST alpha among duplicates.
+     */
+    private function dedupeRectsByPage(array $cleanByPage): array
+    {
+        $out = [];
+
+        foreach ($cleanByPage as $page => $rects) {
+            $seen = [];
+
+            foreach ($rects as $r) {
+                // Ensure fields exist
+                if (!isset($r['x'], $r['y'], $r['w'], $r['h'])) continue;
+
+                $style = $this->normalizeStyle($r['style'] ?? null);
+
+                $rect = [
+                    'x' => (float)$r['x'],
+                    'y' => (float)$r['y'],
+                    'w' => (float)$r['w'],
+                    'h' => (float)$r['h'],
+                ];
+
+                $key = $this->rectKey((int)$page, $rect, $style);
+
+                if (!isset($seen[$key])) {
+                    $seen[$key] = [
+                        'x' => $rect['x'],
+                        'y' => $rect['y'],
+                        'w' => $rect['w'],
+                        'h' => $rect['h'],
+                        'style' => $style,
+                    ];
+                } else {
+                    // If same key repeats, keep lightest alpha to prevent darkening
+                    $existingAlpha = (float)($seen[$key]['style']['alpha'] ?? 1.0);
+                    if ($style['alpha'] < $existingAlpha) {
+                        $seen[$key]['style']['alpha'] = $style['alpha'];
+                    }
+                }
+            }
+
+            $out[(int)$page] = array_values($seen);
+        }
+
+        return $out;
+    }
+
+
+    /**
+     * Merge overlapping/nearby rects per page/style so alpha doesn't stack.
+     * This is stronger than "dedupe": it collapses intersecting boxes into one.
+     */
+    private function mergeOverlappingRectsByPage(array $cleanByPage, float $eps = 0.0015): array
+    {
+        $out = [];
+
+        foreach ($cleanByPage as $page => $rects) {
+            // group by normalized style (color+alpha)
+            $groups = [];
+            foreach ($rects as $r) {
+                if (!isset($r['x'], $r['y'], $r['w'], $r['h'])) continue;
+                $style = $this->normalizeStyle($r['style'] ?? null);
+                $key = $style['color'] . '|' . ((string)round($style['alpha'], 3));
+                $groups[$key][] = [
+                    'x' => (float)$r['x'],
+                    'y' => (float)$r['y'],
+                    'w' => (float)$r['w'],
+                    'h' => (float)$r['h'],
+                    'style' => $style,
+                ];
+            }
+
+            $mergedAll = [];
+
+            foreach ($groups as $g) {
+                // sort for more stable merging
+                usort($g, function ($a, $b) {
+                    if ($a['y'] == $b['y']) return $a['x'] <=> $b['x'];
+                    return $a['y'] <=> $b['y'];
+                });
+
+                $merged = [];
+                foreach ($g as $r) {
+                    $didMerge = false;
+
+                    for ($i = 0; $i < count($merged); $i++) {
+                        if ($this->rectsOverlapOrTouch($merged[$i], $r, $eps)) {
+                            $merged[$i] = $this->rectUnion($merged[$i], $r);
+                            $didMerge = true;
+                            break;
+                        }
+                    }
+
+                    if (!$didMerge) {
+                        $merged[] = $r;
+                    }
+                }
+
+                // second pass to catch chain overlaps (A overlaps B overlaps C)
+                $changed = true;
+                while ($changed) {
+                    $changed = false;
+                    $tmp = [];
+                    foreach ($merged as $r) {
+                        $mergedInto = false;
+                        for ($i = 0; $i < count($tmp); $i++) {
+                            if ($this->rectsOverlapOrTouch($tmp[$i], $r, $eps)) {
+                                $tmp[$i] = $this->rectUnion($tmp[$i], $r);
+                                $mergedInto = true;
+                                $changed = true;
+                                break;
+                            }
+                        }
+                        if (!$mergedInto) $tmp[] = $r;
+                    }
+                    $merged = $tmp;
+                }
+
+                $mergedAll = array_merge($mergedAll, $merged);
+            }
+
+            $out[(int)$page] = $mergedAll;
+        }
+
+        return $out;
+    }
+
+    private function rectsOverlapOrTouch(array $a, array $b, float $eps): bool
+    {
+        $ax1 = $a['x'];
+        $ay1 = $a['y'];
+        $ax2 = $a['x'] + $a['w'];
+        $ay2 = $a['y'] + $a['h'];
+
+        $bx1 = $b['x'];
+        $by1 = $b['y'];
+        $bx2 = $b['x'] + $b['w'];
+        $by2 = $b['y'] + $b['h'];
+
+        // overlap/touch with epsilon margin
+        return !(
+            $ax2 < $bx1 - $eps ||
+            $bx2 < $ax1 - $eps ||
+            $ay2 < $by1 - $eps ||
+            $by2 < $ay1 - $eps
+        );
+    }
+
+    private function rectUnion(array $a, array $b): array
+    {
+        $x1 = min($a['x'], $b['x']);
+        $y1 = min($a['y'], $b['y']);
+        $x2 = max($a['x'] + $a['w'], $b['x'] + $b['w']);
+        $y2 = max($a['y'] + $a['h'], $b['y'] + $b['h']);
+
+        return [
+            'x' => $x1,
+            'y' => $y1,
+            'w' => max(0.0001, $x2 - $x1),
+            'h' => max(0.0001, $y2 - $y1),
+            'style' => $a['style'], // same style group
+        ];
+    }
+
+
+    /* ---------------------------------------------------------
+     * APPLY HIGHLIGHTS (main)
      * --------------------------------------------------------- */
 
     public function apply(ApplyHighlightsRequest $request, Paper $paper)
@@ -108,7 +329,7 @@ class PdfHighlightController extends Controller
             $replace = $request->boolean('replace', false);
 
             // -----------------------------------------------------
-            // NORMALIZE HIGHLIGHTS
+            // NORMALIZE HIGHLIGHTS (same behavior as before)
             // -----------------------------------------------------
             $cleanByPage = [];
             $MAX_RECTS = 2000;
@@ -161,8 +382,12 @@ class PdfHighlightController extends Controller
                 throw new \InvalidArgumentException('No valid highlights');
             }
 
+            // ✅ NEW: DEDUPE so the same position is highlighted only once
+            $cleanByPage = $this->dedupeRectsByPage($cleanByPage);          // exact dupes
+            $cleanByPage = $this->mergeOverlappingRectsByPage($cleanByPage); // overlap merge ✅
+
             // -----------------------------------------------------
-            // OUTPUT PATH
+            // OUTPUT PATH (unchanged)
             // -----------------------------------------------------
             $dir   = trim(dirname($srcPath), '/');
             $base  = pathinfo($srcPath, PATHINFO_FILENAME);
@@ -176,7 +401,7 @@ class PdfHighlightController extends Controller
             $absOut = Storage::disk($srcDisk)->path($outRel);
 
             // -----------------------------------------------------
-            // RENDER PDF
+            // RENDER PDF (minimal changes: use normalized style)
             // -----------------------------------------------------
             $pdf = new Fpdi();
             $pageCount = $pdf->setSourceFile($absIn);
@@ -189,9 +414,9 @@ class PdfHighlightController extends Controller
                 $pdf->useTemplate($tplIdx);
 
                 foreach ($cleanByPage[$pageNo] ?? [] as $rect) {
-                    $style = $rect['style'] ?? [];
-                    $color = $style['color'] ?? '#FFEB3B';
-                    $alpha = $this->clamp($style['alpha'] ?? 0.25, 0.0, 1.0);
+                    $style = $this->normalizeStyle($rect['style'] ?? null);
+                    $color = $style['color'];
+                    $alpha = $style['alpha'];
 
                     [$r, $g, $b] = $this->hexToRgb($color);
 
