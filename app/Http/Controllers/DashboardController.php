@@ -71,38 +71,42 @@ class DashboardController extends Controller
         }
 
         // ----- Totals -----
-        // ----- Totals -----
 
-        // 1. Total papers (includes archived)
+        // 1. Total papers (all papers created by users)
         $totalPapers = DB::table('papers')
             ->whereIn('created_by', $userIds)
             ->count();
 
-        // 2. Archived papers
-        $archived = DB::table('papers')
-            ->whereIn('created_by', $userIds)
-            ->where('review_status', 'archived')
-            ->count();
+        // 2. Archived papers (derived from reviews table)
+        $archived = DB::table('reviews')
+            ->join('papers', 'papers.id', '=', 'reviews.paper_id')
+            ->whereIn('papers.created_by', $userIds)
+            ->where('reviews.status', 'archived')
+            ->distinct('reviews.paper_id')
+            ->count('reviews.paper_id');
 
-        // 3. Papers reviewed (distinct papers)
+        // 3. Reviewed papers (distinct papers with done review)
         $reviewed = DB::table('reviews')
-            ->whereIn('user_id', $userIds)
-            ->where('status', 'done')
-            ->distinct('paper_id')
-            ->count('paper_id');
+            ->join('papers', 'papers.id', '=', 'reviews.paper_id')
+            ->whereIn('papers.created_by', $userIds)
+            ->where('reviews.status', 'done')
+            ->distinct('reviews.paper_id')
+            ->count('reviews.paper_id');
 
-        // 4. Papers started (distinct papers, not done)
+        // 4. Started papers (distinct papers with non-done & non-archived review)
         $started = DB::table('reviews')
-            ->whereIn('user_id', $userIds)
-            ->where('status', '!=', 'done')
-            ->distinct('paper_id')
-            ->count('paper_id');
+            ->join('papers', 'papers.id', '=', 'reviews.paper_id')
+            ->whereIn('papers.created_by', $userIds)
+            ->whereNotIn('reviews.status', ['done', 'archived'])
+            ->distinct('reviews.paper_id')
+            ->count('reviews.paper_id');
 
         // 5. Active papers (exclude archived)
         $activePapers = $totalPapers - $archived;
 
         // 6. In Queue = active − reviewed − started
         $inQueue = max($activePapers - $reviewed - $started, 0);
+
 
 
         $collections  = DB::table('collections')
