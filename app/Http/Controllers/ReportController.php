@@ -257,6 +257,21 @@ class ReportController extends Controller
         return $normalized;
     }
 
+    private function isLiteratureSection($sec): bool
+    {
+        $k = strtolower(trim((string) ($sec->key ?? '')));
+        $l = strtolower(trim((string) ($sec->label ?? '')));
+
+        $litKeys = [
+            'literature_review',
+            'literature review',
+            'litracture review',
+        ];
+
+        return in_array($k, $litKeys, true) || in_array($l, $litKeys, true);
+    }
+
+
     protected function buildRolDataset(
         array $userIds,
         array $filters,
@@ -268,10 +283,18 @@ class ReportController extends Controller
         /* ---------------------------------
          * 1. Load section definitions (DB)
          * --------------------------------- */
+        // $sectionDefs = \App\Models\ReviewSectionKey::query()
+        //     ->where('active', 1)
+        //     ->orderBy('order')
+        //     ->get(['label', 'key']);
+
         $sectionDefs = \App\Models\ReviewSectionKey::query()
             ->where('active', 1)
             ->orderBy('order')
-            ->get(['label', 'key']);
+            ->get(['label', 'key'])
+            ->filter(fn($sec) => !$this->isLiteratureSection($sec))
+            ->values();
+
 
         if ($sectionDefs->isEmpty()) {
             return [[], []];
