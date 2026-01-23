@@ -176,6 +176,124 @@ class PdfHighlightController extends Controller
         return $out;
     }
 
+
+    /**
+     * Merge overlapping/nearby rects per page/style so alpha doesn't stack.
+     * This is stronger than "dedupe": it collapses intersecting boxes into one.
+     */
+    private function mergeOverlappingRectsByPage(array $cleanByPage, float $eps = 0.0015): array
+    {
+        $out = [];
+
+        foreach ($cleanByPage as $page => $rects) {
+            // group by normalized style (color+alpha)
+            $groups = [];
+            foreach ($rects as $r) {
+                if (!isset($r['x'], $r['y'], $r['w'], $r['h'])) continue;
+                $style = $this->normalizeStyle($r['style'] ?? null);
+                $key = $style['color'] . '|' . ((string)round($style['alpha'], 3));
+                $groups[$key][] = [
+                    'x' => (float)$r['x'],
+                    'y' => (float)$r['y'],
+                    'w' => (float)$r['w'],
+                    'h' => (float)$r['h'],
+                    'style' => $style,
+                ];
+            }
+
+            $mergedAll = [];
+
+            foreach ($groups as $g) {
+                // sort for more stable merging
+                usort($g, function ($a, $b) {
+                    if ($a['y'] == $b['y']) return $a['x'] <=> $b['x'];
+                    return $a['y'] <=> $b['y'];
+                });
+
+                $merged = [];
+                foreach ($g as $r) {
+                    $didMerge = false;
+
+                    for ($i = 0; $i < count($merged); $i++) {
+                        if ($this->rectsOverlapOrTouch($merged[$i], $r, $eps)) {
+                            $merged[$i] = $this->rectUnion($merged[$i], $r);
+                            $didMerge = true;
+                            break;
+                        }
+                    }
+
+                    if (!$didMerge) {
+                        $merged[] = $r;
+                    }
+                }
+
+                // second pass to catch chain overlaps (A overlaps B overlaps C)
+                $changed = true;
+                while ($changed) {
+                    $changed = false;
+                    $tmp = [];
+                    foreach ($merged as $r) {
+                        $mergedInto = false;
+                        for ($i = 0; $i < count($tmp); $i++) {
+                            if ($this->rectsOverlapOrTouch($tmp[$i], $r, $eps)) {
+                                $tmp[$i] = $this->rectUnion($tmp[$i], $r);
+                                $mergedInto = true;
+                                $changed = true;
+                                break;
+                            }
+                        }
+                        if (!$mergedInto) $tmp[] = $r;
+                    }
+                    $merged = $tmp;
+                }
+
+                $mergedAll = array_merge($mergedAll, $merged);
+            }
+
+            $out[(int)$page] = $mergedAll;
+        }
+
+        return $out;
+    }
+
+    private function rectsOverlapOrTouch(array $a, array $b, float $eps): bool
+    {
+        $ax1 = $a['x'];
+        $ay1 = $a['y'];
+        $ax2 = $a['x'] + $a['w'];
+        $ay2 = $a['y'] + $a['h'];
+
+        $bx1 = $b['x'];
+        $by1 = $b['y'];
+        $bx2 = $b['x'] + $b['w'];
+        $by2 = $b['y'] + $b['h'];
+
+        // overlap/touch with epsilon margin
+        return !(
+            $ax2 < $bx1 - $eps ||
+            $bx2 < $ax1 - $eps ||
+            $ay2 < $by1 - $eps ||
+            $by2 < $ay1 - $eps
+        );
+    }
+
+    private function rectUnion(array $a, array $b): array
+    {
+        $x1 = min($a['x'], $b['x']);
+        $y1 = min($a['y'], $b['y']);
+        $x2 = max($a['x'] + $a['w'], $b['x'] + $b['w']);
+        $y2 = max($a['y'] + $a['h'], $b['y'] + $b['h']);
+
+        return [
+            'x' => $x1,
+            'y' => $y1,
+            'w' => max(0.0001, $x2 - $x1),
+            'h' => max(0.0001, $y2 - $y1),
+            'style' => $a['style'], // same style group
+        ];
+    }
+
+
     /* ---------------------------------------------------------
      * APPLY HIGHLIGHTS (main)
      * --------------------------------------------------------- */
@@ -265,7 +383,8 @@ class PdfHighlightController extends Controller
             }
 
             // ✅ NEW: DEDUPE so the same position is highlighted only once
-            $cleanByPage = $this->dedupeRectsByPage($cleanByPage);
+            $cleanByPage = $this->dedupeRectsByPage($cleanByPage);          // exact dupes
+            $cleanByPage = $this->mergeOverlappingRectsByPage($cleanByPage); // overlap merge ✅
 
             // -----------------------------------------------------
             // OUTPUT PATH (unchanged)
