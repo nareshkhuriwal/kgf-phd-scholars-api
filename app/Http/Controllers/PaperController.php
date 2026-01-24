@@ -15,6 +15,8 @@ use Illuminate\Database\QueryException;
 use App\Http\Controllers\Concerns\OwnerAuthorizes;
 use App\Support\ResolvesApiScope;
 use App\Models\Citation; // ✅ Add this import
+use App\Models\ReviewQueue;
+use Illuminate\Support\Str;
 
 class PaperController extends Controller
 {
@@ -22,65 +24,72 @@ class PaperController extends Controller
 
     public function index(Request $req)
     {
-        $req->user() ?? abort(401, 'Unauthenticated');
+        $user = $req->user() ?? abort(401, 'Unauthenticated');
 
-        Log::info('Paper index called', [
-            'user_id' => $req->user()->id,
-            'role' => $req->user()->role
-        ]);
+        Log::info('Paper index called', ['user_id' => $user->id, 'role' => $user->role]);
 
-        // Get accessible user IDs
         $userIds = $this->resolveApiUserIds($req);
+        Log::info('Accessible user IDs for papers', ['count' => count($userIds)]);
 
-        Log::info('Accessible user IDs for papers', [
-            'user_ids' => $userIds,
-            'count' => count($userIds)
-        ]);
+        // ---------- Inputs (sanitized) ----------
+        $search = trim((string) $req->query('search', ''));
+        $category = $req->query('category');
 
+        $perRaw = $req->query('per_page', $req->query('perPage', $req->query('limit', 10)));
+        $per = max(5, min(200, (int) $perRaw));
+
+        $page = max(1, (int) $req->query('page', 1));
+
+        $allowedSort = ['id', 'title', 'authors', 'year', 'doi', 'created_at', 'updated_at'];
+        $sortBy = $req->query('sort_by', 'id');
+        $sortBy = in_array($sortBy, $allowedSort, true) ? $sortBy : 'title';
+
+        $sortDir = Str::lower((string) $req->query('sort_dir', 'asc')) === 'desc' ? 'desc' : 'asc';
+
+        // ---------- Query ----------
         $q = Paper::query()
             ->whereIn('created_by', $userIds)
-            ->with('creator:id,name,email,role') // Load creator with only needed fields
-            ->withCount('files');
+            ->with('creator:id,name,email,role')
+            ->withCount('files')
+            // ✅ computed flags (picked for review vs added in review table)
+            ->addSelect([
+                'in_review_queue' => ReviewQueue::selectRaw('1')
+                    ->whereColumn('review_queues.paper_id', 'papers.id')
+                    ->where('review_queues.user_id', $user->id)
+                    ->limit(1),
 
-        if ($s = $req->get('search')) {
-            $q->where(function ($w) use ($s) {
-                $w->where('title', 'like', "%$s%")
-                    ->orWhere('authors', 'like', "%$s%")
-                    ->orWhere('doi', 'like', "%$s%")
-                    ->orWhere('paper_code', 'like', "%$s%");
+                'in_review_table' => DB::table('reviews')->selectRaw('1')
+                    ->whereColumn('reviews.paper_id', 'papers.id')
+                    ->where('reviews.user_id', $user->id)
+                    ->limit(1),
+            ]);
+
+        if ($search !== '') {
+            $q->where(function ($w) use ($search) {
+                $like = "%{$search}%";
+                $w->where('title', 'like', $like)
+                    ->orWhere('authors', 'like', $like)
+                    ->orWhere('doi', 'like', $like)
+                    ->orWhere('paper_code', 'like', $like);
             });
         }
 
-        if ($cat = $req->get('category')) {
-            $q->where('category', $cat);
+        if (!is_null($category) && $category !== '') {
+            $q->where('category', $category);
         }
 
-        // support common variants (snake_case, camelCase, limit)
-        $perRaw = $req->get('per_page', $req->get('perPage', $req->get('limit', null)));
-        $per = (int) ($perRaw ?: 10);
-
-        // guard: reasonable min/max to avoid massive pages
-        $min = 5;
-        $max = 200;
-        if ($per < $min) $per = $min;
-        if ($per > $max) $per = $max;
-
-        // explicitly pass page too (safer when client sets page)
-        $page = (int) $req->get('page', 1);
-
-        $sortBy = $req->get('sort_by', 'id');
-        $sortDir = strtolower($req->get('sort_dir', 'asc')) === 'asc' ? 'asc' : 'desc';
-        $allowed = ['id', 'title', 'authors', 'year', 'doi', 'created_at', 'updated_at'];
-        if (!in_array($sortBy, $allowed)) {
-            $sortBy = 'title';
-        }
         $q->orderBy($sortBy, $sortDir);
+
         $p = $q->paginate($per, ['*'], 'page', $page);
 
         Log::info('Papers retrieved', [
             'total' => $p->total(),
             'per_page' => $per,
-            'current_page' => $page
+            'current_page' => $p->currentPage(),
+            'sort_by' => $sortBy,
+            'sort_dir' => $sortDir,
+            'has_search' => $search !== '',
+            'has_category' => !is_null($category) && $category !== '',
         ]);
 
         return PaperResource::collection($p);
@@ -88,24 +97,28 @@ class PaperController extends Controller
 
     public function show(Request $req, Paper $paper)
     {
-        $req->user() ?? abort(401, 'Unauthenticated');
+        $user = $req->user() ?? abort(401, 'Unauthenticated');
 
-        Log::info('Paper show called', [
-            'paper_id' => $paper->id,
-            'user_id' => $req->user()->id
-        ]);
+        Log::info('Paper show called', ['paper_id' => $paper->id, 'user_id' => $user->id]);
 
-        // Check if user has access to this paper's owner
         $this->authorizeUserAccess($req, $paper->created_by);
 
-        Log::info('User authorized to view paper', [
-            'paper_id' => $paper->id,
-            'paper_owner' => $paper->created_by
-        ]);
-
+        // ✅ include flags + files in one go (no extra resource logic)
         $paper->load('files');
+
+        $paper->setAttribute(
+            'in_review_queue',
+            ReviewQueue::where('user_id', $user->id)->where('paper_id', $paper->id)->exists()
+        );
+
+        $paper->setAttribute(
+            'in_review_table',
+            DB::table('reviews')->where('user_id', $user->id)->where('paper_id', $paper->id)->exists()
+        );
+
         return new PaperResource($paper);
     }
+
 
     public function store(PaperRequest $req)
     {
@@ -480,7 +493,7 @@ class PaperController extends Controller
 
         return $citation;
     }
-    
+
     /**
      * Save an uploaded file to storage and create the paper_files row.
      */

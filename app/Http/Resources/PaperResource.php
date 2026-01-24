@@ -33,6 +33,15 @@ class PaperResource extends JsonResource
             'area'          => $this->area,
             'citation_type_code' => $this->citation_type_code,
 
+            // Review pick status (computed, not stored in papers table)
+            'in_review_queue' => (bool) ($this->in_review_queue ?? false),
+            'in_review_table' => (bool) ($this->in_review_table ?? false),
+
+            // As per your rule: if present in review table => added, else not added
+            'is_added_for_review' => (bool) ($this->in_review_table ?? false),
+            'review_pick_status' => ((bool) ($this->in_review_table ?? false)) ? 'added' : 'not_added',
+
+
 
             // optional convenience for the viewer
             'pdf_url' => $primaryUrl,

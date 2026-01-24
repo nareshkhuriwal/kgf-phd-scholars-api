@@ -45,18 +45,11 @@ class ReviewQueueController extends Controller
             ->whereIn('user_id', $userIds)
             ->whereHas('paper', fn ($q) => $q->whereIn('created_by', $userIds))
             ->get()
-            ->map(function ($rq) {
-                $paper = $rq->paper;
-                if ($paper) {
-                    // tell the resource this paper is in queue (no N+1)
-                    $paper->setAttribute('in_review_queue', true);
-                }
-                return $paper;
-            })
+            ->map(fn ($rq) => $rq->paper)
             ->filter()
+            // ->sortByDesc('updated_at') // ✅ THIS FIXES IT
             ->sortBy('id')
             ->values();
-
 
 
 
@@ -102,9 +95,7 @@ class ReviewQueueController extends Controller
             'reviews' => fn ($q) => $q->where('user_id', $userId),
             'creator:id,name,email,role'
         ]);
-                
-        $paper->setAttribute('in_review_queue', true);
-
+        
         return new PaperSummaryResource($paper);
     }
 
