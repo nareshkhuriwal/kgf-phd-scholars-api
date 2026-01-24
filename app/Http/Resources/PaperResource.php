@@ -35,7 +35,7 @@ class PaperResource extends JsonResource
 
             // Review pick status (computed, not stored in papers table)
             'is_added_for_review' => (bool) ($this->is_added_for_review ?? false),
-            'status' => (bool) ($this->is_added_for_review ?? false) ? 'added' : 'not_added',
+            'status' => (bool) ($this->is_added_for_review ?? false) ? 'Added' : 'Not Added',
 
             // optional convenience for the viewer
             'pdf_url' => $primaryUrl,
