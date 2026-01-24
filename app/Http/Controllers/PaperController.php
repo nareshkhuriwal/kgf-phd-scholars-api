@@ -51,18 +51,20 @@ class PaperController extends Controller
             ->whereIn('created_by', $userIds)
             ->with('creator:id,name,email,role')
             ->withCount('files')
-            // ✅ computed flags (picked for review vs added in review table)
             ->addSelect([
+                // ✅ exists in review_queue for this user
                 'in_review_queue' => ReviewQueue::selectRaw('1')
-                    ->whereColumn('review_queues.paper_id', 'papers.id')
-                    ->where('review_queues.user_id', $user->id)
+                    ->whereColumn('paper_id', 'papers.id')
+                    ->where('user_id', $user->id)
                     ->limit(1),
 
+                // ✅ exists in reviews for this user
                 'in_review_table' => DB::table('reviews')->selectRaw('1')
                     ->whereColumn('reviews.paper_id', 'papers.id')
                     ->where('reviews.user_id', $user->id)
                     ->limit(1),
             ]);
+
 
         if ($search !== '') {
             $q->where(function ($w) use ($search) {
