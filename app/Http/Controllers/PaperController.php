@@ -32,11 +32,11 @@ class PaperController extends Controller
         Log::info('Accessible user IDs for papers', ['count' => count($userIds)]);
 
         // ---------- Inputs (sanitized) ----------
-        $search = trim((string) $req->query('search', ''));
+        $search   = trim((string) $req->query('search', ''));
         $category = $req->query('category');
 
         $perRaw = $req->query('per_page', $req->query('perPage', $req->query('limit', 10)));
-        $per = max(5, min(200, (int) $perRaw));
+        $per    = max(5, min(200, (int) $perRaw));
 
         $page = max(1, (int) $req->query('page', 1));
 
@@ -65,7 +65,6 @@ class PaperController extends Controller
                     ->limit(1),
             ]);
 
-
         if ($search !== '') {
             $q->where(function ($w) use ($search) {
                 $like = "%{$search}%";
@@ -82,12 +81,22 @@ class PaperController extends Controller
 
         $q->orderBy($sortBy, $sortDir);
 
+        // ✅ First paginate using requested page
         $p = $q->paginate($per, ['*'], 'page', $page);
+
+        // ✅ Clamp out-of-range page numbers (prevents empty data when page > last_page)
+        $lastPage = $p->lastPage(); // 0 when no records
+        if ($lastPage > 0 && $page > $lastPage) {
+            $page = $lastPage;
+            $p = $q->paginate($per, ['*'], 'page', $page);
+        }
 
         Log::info('Papers retrieved', [
             'total' => $p->total(),
             'per_page' => $per,
+            'requested_page' => (int) $req->query('page', 1),
             'current_page' => $p->currentPage(),
+            'last_page' => $p->lastPage(),
             'sort_by' => $sortBy,
             'sort_dir' => $sortDir,
             'has_search' => $search !== '',
@@ -96,6 +105,7 @@ class PaperController extends Controller
 
         return PaperResource::collection($p);
     }
+
 
     public function show(Request $req, Paper $paper)
     {
