@@ -52,18 +52,13 @@ class PaperController extends Controller
             ->with('creator:id,name,email,role')
             ->withCount('files')
             ->addSelect([
-                // ✅ exists in review_queue for this user
-                'in_review_queue' => ReviewQueue::selectRaw('1')
+                // ✅ ONE status column: 1 if paper is in review_queue for ANY accessible user
+                'is_added_for_review' => ReviewQueue::selectRaw('1')
                     ->whereColumn('paper_id', 'papers.id')
-                    ->where('user_id', $user->id)
-                    ->limit(1),
-
-                // ✅ exists in reviews for this user
-                'in_review_table' => DB::table('reviews')->selectRaw('1')
-                    ->whereColumn('reviews.paper_id', 'papers.id')
-                    ->where('reviews.user_id', $user->id)
+                    ->whereIn('user_id', $userIds)
                     ->limit(1),
             ]);
+
 
         if ($search !== '') {
             $q->where(function ($w) use ($search) {
