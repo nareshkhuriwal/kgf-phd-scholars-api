@@ -97,7 +97,7 @@ class DashboardController extends Controller
         $started = DB::table('reviews')
             ->join('papers', 'papers.id', '=', 'reviews.paper_id')
             ->whereIn('papers.created_by', $userIds)
-            ->whereNotIn('reviews.status', ['done', 'archived'])
+            ->where('reviews.status', 'in_progress')
             ->distinct('reviews.paper_id')
             ->count('reviews.paper_id');
 
