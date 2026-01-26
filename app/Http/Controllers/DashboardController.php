@@ -116,12 +116,12 @@ class DashboardController extends Controller
         /* =======================
          * DERIVED KPIs (NEW)
          * ======================= */
-        $reviewCompletionRate = $totalPapers > 0
-            ? round(($reviewed / $totalPapers) * 100, 1)
+        $reviewCompletionRate = $activePapers > 0
+            ? round(($reviewed / $activePapers) * 100, 1)
             : 0;
 
-        $queuePressure = $totalPapers > 0
-            ? round(($inQueue / $totalPapers) * 100, 1)
+        $queuePressure = $activePapers > 0
+            ? round(($inQueue / $activePapers) * 100, 1)
             : 0;
 
         // ----- Year-wise Paper Stats (from papers.year column) -----
