@@ -105,7 +105,7 @@ class DashboardController extends Controller
         $activePapers = $totalPapers - $archived;
 
         // 6. In Queue = active − reviewed − started
-        $inQueue = max($activePapers - $reviewed, 0);
+        $inQueue = max($activePapers - $reviewed - $started, 0);
 
 
 
