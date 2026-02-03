@@ -352,13 +352,32 @@ class ReportController extends Controller
             // ->where('status', 'done')
             ->groupBy('paper_id');
 
+        // $query = DB::table('papers')
+        //     ->leftJoinSub($latestDoneIds, 'lr', 'lr.paper_id', '=', 'papers.id')
+        //     ->leftJoin('reviews as rv', function ($j) use ($userIds) {
+        //         $j->on('rv.id', '=', 'lr.id')
+        //             ->whereIn('rv.user_id', $userIds);
+        //     })
+        //     ->whereIn('papers.created_by', $userIds)
+        //     ->select([
+        //         'papers.*',
+        //         'rv.review_sections',
+        //     ])
+        //     ->orderByDesc('papers.id');
+
+        $archivedPaperIds = DB::table('reviews')
+            ->whereIn('user_id', $userIds)
+            ->where('status', 'archived')
+            ->select('paper_id');
+
         $query = DB::table('papers')
             ->leftJoinSub($latestDoneIds, 'lr', 'lr.paper_id', '=', 'papers.id')
             ->leftJoin('reviews as rv', function ($j) use ($userIds) {
                 $j->on('rv.id', '=', 'lr.id')
-                    ->whereIn('rv.user_id', $userIds);
+                ->whereIn('rv.user_id', $userIds);
             })
             ->whereIn('papers.created_by', $userIds)
+            ->whereNotIn('papers.id', $archivedPaperIds)   // ✅ EXCLUDE ARCHIVED
             ->select([
                 'papers.*',
                 'rv.review_sections',
@@ -674,7 +693,15 @@ class ReportController extends Controller
         $hasROL = $template !== 'synopsis' && !!array_filter($include, fn($v) => (bool)$v === true);
         $hasChapters  = count($chaptersSel) > 0;
 
-        $totalPapers = Paper::whereIn('created_by', $userIds)->count();
+        // $totalPapers = Paper::whereIn('created_by', $userIds)->count();
+        $totalPapers = Paper::whereIn('created_by', $userIds)
+            ->whereNotExists(function ($q) {
+                $q->select(DB::raw(1))
+                ->from('reviews')
+                ->whereColumn('reviews.paper_id', 'papers.id')
+                ->where('reviews.status', 'archived');
+            })
+            ->count();
 
         $resp = [
             'name'     => $name,
