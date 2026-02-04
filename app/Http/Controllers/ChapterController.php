@@ -408,7 +408,7 @@ class ChapterController extends Controller
             'ok'    => true,
             'items' => Chapter::whereIn('user_id', $userIds)
                 ->orderBy('order_index')
-                ->get(['id', 'title', 'order_index', 'updated_at', 'created_at']),
+                ->get(['id', 'title', 'order_index', 'chapter_type', 'updated_at', 'created_at']),
         ]);
     }
 }
