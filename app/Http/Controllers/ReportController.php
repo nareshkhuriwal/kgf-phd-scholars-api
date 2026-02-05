@@ -108,7 +108,11 @@ class ReportController extends Controller
         ]);
 
         // Get user IDs based on dashboard scope
-        $userIds = $this->resolveDashboardUserIds($request);
+        // $userIds = $this->resolveDashboardUserIds($request);
+        $userIds = $this->normalizeUserIds(
+            $this->resolveDashboardUserIds($request)
+        );
+
 
         Log::info('ROL user IDs resolved', [
             'user_ids' => $userIds,
@@ -142,7 +146,11 @@ class ReportController extends Controller
         ]);
 
         // Get user IDs based on dashboard scope
-        $userIds = $this->resolveDashboardUserIds($request);
+        // $userIds = $this->resolveDashboardUserIds($request);
+        $userIds = $this->normalizeUserIds(
+            $this->resolveDashboardUserIds($request)
+        );
+
 
         Log::info('Literature user IDs resolved', [
             'user_ids' => $userIds,
@@ -440,6 +448,19 @@ class ReportController extends Controller
         return [$columns, $rows];
     }
 
+    private function normalizeUserIds(array $userIds): array
+    {
+        return array_values(
+            array_unique(
+                array_map(
+                    'intval',
+                    Arr::flatten($userIds)
+                )
+            )
+        );
+    }
+
+
     /**
      * Build SYNOPSIS-like dataset for specific user.
      */
@@ -679,7 +700,8 @@ class ReportController extends Controller
         $this->validateReportAccess($request->user(), $targetUserId);
 
         // Use only the target user's data
-        $userIds = [(int) $targetUserId];
+        // $userIds = [(int) $targetUserId];
+        $userIds = $this->normalizeUserIds([$targetUserId]);
 
         Log::info('Preview using target user', [
             'current_user_id' => $request->user()->id,
@@ -787,7 +809,8 @@ class ReportController extends Controller
         $this->validateReportAccess($request->user(), $targetUserId);
 
         // Use only the target user's data
-        $userIds = [(int) $targetUserId];
+        // $userIds = [(int) $targetUserId];
+        $userIds = $this->normalizeUserIds([$targetUserId]);
 
         $format   = strtolower($payload['format']);
         $filename = preg_replace('/[^A-Za-z0-9._-]+/', '_', $payload['filename'] ?? 'report') . ".{$format}";
@@ -834,7 +857,11 @@ class ReportController extends Controller
         ]);
 
         // Get user IDs based on dashboard scope
-        $userIds = $this->resolveDashboardUserIds($request);
+        // $userIds = $this->resolveDashboardUserIds($request);
+        $userIds = $this->normalizeUserIds(
+            $this->resolveDashboardUserIds($request)
+        );
+
 
         $payload = $request->validate([
             'type'    => 'required|string|in:all-users,all-papers,by-collection',
