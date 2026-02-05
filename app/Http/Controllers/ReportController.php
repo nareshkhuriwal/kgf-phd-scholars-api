@@ -559,7 +559,7 @@ class ReportController extends Controller
         $chapters = [];
         if (!empty($chapterIds)) {
             $rows = DB::table('chapters')
-                ->select(['id', 'title', 'body_html'])
+                ->select(['id', 'title', 'body_html', 'chapter_type', 'chapter_section', 'order_index'])
                 ->whereIn('user_id', $userIds)
                 ->whereIn('id', $chapterIds)
                 ->orderByRaw("FIELD(id," . implode(',', array_map('intval', $chapterIds)) . ")")
@@ -570,6 +570,10 @@ class ReportController extends Controller
                     'id'        => $ch->id,
                     'title'     => $ch->title,
                     'body_html' => $this->cleanText($ch->body_html),
+                    'chapter_type'    => $ch->chapter_type,     // ✅
+                    'chapter_section' => $ch->chapter_section,  // ✅ CRITICAL
+                    'order_index'     => $ch->order_index,
+
                 ];
             }
         }
