@@ -12,6 +12,7 @@ class ChapterRequest extends FormRequest
         return [
             'title'         => ['required','string','max:255'],
             'chapter_type'         => ['required','string','max:255'],
+            'chapter_section' => 'required|string|max:255',
             'collection_id' => ['nullable','exists:collections,id'],
             'order_index'   => ['nullable','integer'],
             'body_html'     => ['nullable','string'],
