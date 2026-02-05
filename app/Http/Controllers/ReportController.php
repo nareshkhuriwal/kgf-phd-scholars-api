@@ -374,7 +374,7 @@ class ReportController extends Controller
             ->leftJoinSub($latestDoneIds, 'lr', 'lr.paper_id', '=', 'papers.id')
             ->leftJoin('reviews as rv', function ($j) use ($userIds) {
                 $j->on('rv.id', '=', 'lr.id')
-                ->whereIn('rv.user_id', $userIds);
+                    ->whereIn('rv.user_id', $userIds);
             })
             ->whereIn('papers.created_by', $userIds)
             ->whereNotIn('papers.id', $archivedPaperIds)   // ✅ EXCLUDE ARCHIVED
@@ -559,17 +559,21 @@ class ReportController extends Controller
         $chapters = [];
         if (!empty($chapterIds)) {
             $rows = DB::table('chapters')
-                ->select(['id', 'title', 'body_html'])
                 ->whereIn('user_id', $userIds)
                 ->whereIn('id', $chapterIds)
                 ->orderByRaw("FIELD(id," . implode(',', array_map('intval', $chapterIds)) . ")")
-                ->get();
+                ->get(); // ✅ DO NOT restrict columns
+
 
             foreach ($rows as $ch) {
                 $chapters[] = [
                     'id'        => $ch->id,
                     'title'     => $ch->title,
                     'body_html' => $this->cleanText($ch->body_html),
+                    'chapter_type'    => $ch->chapter_type,     // ✅
+                    'chapter_section' => $ch->chapter_section,  // ✅ CRITICAL
+                    'order_index'     => $ch->order_index,
+
                 ];
             }
         }
@@ -697,9 +701,9 @@ class ReportController extends Controller
         $totalPapers = Paper::whereIn('created_by', $userIds)
             ->whereNotExists(function ($q) {
                 $q->select(DB::raw(1))
-                ->from('reviews')
-                ->whereColumn('reviews.paper_id', 'papers.id')
-                ->where('reviews.status', 'archived');
+                    ->from('reviews')
+                    ->whereColumn('reviews.paper_id', 'papers.id')
+                    ->where('reviews.status', 'archived');
             })
             ->count();
 
