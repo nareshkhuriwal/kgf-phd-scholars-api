@@ -576,7 +576,16 @@ class ReportController extends Controller
 
 
         // chapters selection (specific user scoped)
-        $chapterIds = array_values(array_filter((array) Arr::get($selections, 'chapters', [])));
+        // $chapterIds = array_values(array_filter((array) Arr::get($selections, 'chapters', [])));
+        $chapterIds = array_values(
+            array_unique(
+                array_map(
+                    'intval',
+                    Arr::flatten((array) Arr::get($selections, 'chapters', []))
+                )
+            )
+        );
+
         $chapters = [];
         if (!empty($chapterIds)) {
             $rows = DB::table('chapters')
