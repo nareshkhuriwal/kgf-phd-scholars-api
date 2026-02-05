@@ -41,11 +41,6 @@ class ChapterController extends Controller
         $query = Chapter::query()
             ->whereIn('user_id', $userIds)
             ->withCount('items')
-            ->orderBy('order_index');
-
-        $query = Chapter::query()
-            ->whereIn('user_id', $userIds)
-            ->withCount('items')
             ->with('creator:id,name,email,role') // ✅ ADD THIS
             ->orderBy('order_index');
 
@@ -54,12 +49,13 @@ class ChapterController extends Controller
             $query->where('collection_id', $collectionId);
         }
 
-        $perPage = $request->integer('per_page', 25);
+        $perPage = $request->integer('per_page', 1000);
 
-        $result = $query->paginate($perPage);
+        // $result = $query->paginate($perPage);
+        $result = $query->get();
 
         Log::info('Chapters retrieved', [
-            'count' => $result->total()
+            'count' => $result->count()
         ]);
 
         return response()->json($result);
