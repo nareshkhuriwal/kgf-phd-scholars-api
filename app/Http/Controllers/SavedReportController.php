@@ -99,6 +99,12 @@ class SavedReportController extends Controller
 
         $data['created_by'] = $userId;
         $data['updated_by'] = $userId;
+        if (
+            ($data['template'] ?? null) === 'presentation' &&
+            empty($data['presentation_theme'])
+        ) {
+            $data['presentation_theme'] = 'adaptiveSynopsis';
+        }
 
         $row = SavedReport::create($data);
 
