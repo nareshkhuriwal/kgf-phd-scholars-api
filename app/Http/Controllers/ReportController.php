@@ -609,6 +609,7 @@ class ReportController extends Controller
         $chapters = DB::table('chapters')
             ->select(['id', 'title', 'body_html', 'chapter_section', 'order_index'])
             ->whereIn('user_id', $userIds)
+            ->whereIn('id', $chapterIds)
             ->orderBy('order_index', 'asc')   // 🔑 canonical order
             ->get()
             ->map(function ($ch) {
