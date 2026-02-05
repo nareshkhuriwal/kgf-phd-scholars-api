@@ -587,24 +587,42 @@ class ReportController extends Controller
         );
 
         $chapters = [];
-        if (!empty($chapterIds)) {
-            $rows = DB::table('chapters')
-                ->select(['id', 'title', 'body_html', 'chapter_section', 'order_index'])
-                ->whereIn('user_id', $userIds)
-                ->whereIn('id', $chapterIds)
-                ->orderByRaw("FIELD(id," . implode(',', array_map('intval', $chapterIds)) . ")")
-                ->get();
+        // if (!empty($chapterIds)) {
+        //     $rows = DB::table('chapters')
+        //         ->select(['id', 'title', 'body_html', 'chapter_section', 'order_index'])
+        //         ->whereIn('user_id', $userIds)
+        //         ->whereIn('id', $chapterIds)
+        //         ->orderByRaw("FIELD(id," . implode(',', array_map('intval', $chapterIds)) . ")")
+        //         ->get();
 
-            foreach ($rows as $ch) {
-                $chapters[] = [
-                    'id'        => $ch->id,
-                    'title'     => $ch->title,
-                    'body_html' => $this->cleanText($ch->body_html),
-                    'chapter_section'   => $ch->chapter_section,
-                    'order_index' => $ch->order_index,    
+        //     foreach ($rows as $ch) {
+        //         $chapters[] = [
+        //             'id'        => $ch->id,
+        //             'title'     => $ch->title,
+        //             'body_html' => $this->cleanText($ch->body_html),
+        //             'chapter_section'   => $ch->chapter_section,
+        //             'order_index' => $ch->order_index,    
+        //         ];
+        //     }
+        // }
+
+        $chapters = DB::table('chapters')
+            ->select(['id', 'title', 'body_html', 'chapter_section', 'order_index'])
+            ->whereIn('user_id', $userIds)
+            ->orderBy('order_index', 'asc')   // 🔑 canonical order
+            ->get()
+            ->map(function ($ch) {
+                return [
+                    'id'              => $ch->id,
+                    'title'           => $ch->title,
+                    'body_html'       => $this->cleanText($ch->body_html),
+                    'chapter_section' => $ch->chapter_section,
+                    'order_index'     => $ch->order_index,
                 ];
-            }
-        }
+            })
+            ->values()
+            ->all();
+
 
         // -------------------------------------------------
         // BUILD FINAL FORMATTED REFERENCES (THESIS SAFE)
