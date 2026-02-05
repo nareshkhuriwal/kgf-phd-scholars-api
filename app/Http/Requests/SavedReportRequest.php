@@ -75,6 +75,7 @@ class SavedReportRequest extends FormRequest
             'template'   => 'required|string|in:synopsis,rol,final_thesis,presentation',
             'format'     => 'nullable|string|in:pdf,docx,xlsx,pptx',
             'filename'   => 'nullable|string|max:255',
+            'presentation_theme' => 'nullable|string|in:adaptiveSynopsis,poornima,classic,modern',
 
             'filters'         => 'required|array',
             'filters.areas'   => 'nullable|array',

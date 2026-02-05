@@ -11,6 +11,7 @@ class SavedReport extends Model
     protected $fillable = [
         'name',
         'template',
+        'presentation_theme', 
         'format',
         'filename',
         'filters',
