@@ -25,45 +25,31 @@ class ChapterController extends Controller
     {
         $request->user() ?? abort(401, 'Unauthenticated');
 
-        Log::info('Chapter index called', [
-            'user_id' => $request->user()->id,
-            'role' => $request->user()->role
-        ]);
-
-        // Get accessible user IDs
         $userIds = $this->resolveApiUserIds($request);
 
-        Log::info('Accessible user IDs for chapters', [
-            'user_ids' => $userIds,
-            'count' => count($userIds)
-        ]);
-
         $query = Chapter::query()
             ->whereIn('user_id', $userIds)
             ->withCount('items')
+            ->with('creator:id,name,email,role')
             ->orderBy('order_index');
-
-        $query = Chapter::query()
-            ->whereIn('user_id', $userIds)
-            ->withCount('items')
-            ->with('creator:id,name,email,role') // ✅ ADD THIS
-            ->orderBy('order_index');
-
 
         if ($collectionId = $request->integer('collection_id')) {
             $query->where('collection_id', $collectionId);
         }
 
-        $perPage = $request->integer('per_page', 25);
+        // 🔑 EXPLICIT: return ALL chapters
+        if ($request->boolean('all')) {
+            return response()->json([
+                'data' => $query->get(),
+            ]);
+        }
 
-        $result = $query->paginate($perPage);
-
-        Log::info('Chapters retrieved', [
-            'count' => $result->total()
-        ]);
-
-        return response()->json($result);
+        // Default paginated behavior (UI-safe)
+        return response()->json(
+            $query->paginate($request->integer('per_page', 25))
+        );
     }
+
 
     /**
      * Lightweight chapter list for dropdowns / selectors.
@@ -72,11 +58,6 @@ class ChapterController extends Controller
     {
         $request->user() ?? abort(401, 'Unauthenticated');
 
-        Log::info('Chapter options called', [
-            'user_id' => $request->user()->id
-        ]);
-
-        // Get accessible user IDs
         $userIds = $this->resolveApiUserIds($request);
 
         $query = Chapter::query()
@@ -86,18 +67,20 @@ class ChapterController extends Controller
             $query->where('title', 'like', "%{$search}%");
         }
 
-        $perPage = $request->get('per_page', 100);
-
-        if ($perPage === 'all') {
+        // 🔑 unified "all" behavior
+        if ($request->boolean('all')) {
             return ChapterOptionResource::collection(
                 $query->orderBy('title')->get()
             );
         }
 
         return ChapterOptionResource::collection(
-            $query->orderBy('title')->paginate((int) $perPage)
+            $query->orderBy('title')->paginate(
+                $request->integer('per_page', 25)
+            )
         );
     }
+
 
     /**
      * Create a new chapter.
@@ -300,7 +283,7 @@ class ChapterController extends Controller
             'paper_id'      => $paper->id,
             'source_field'  => $field,
             'content_html'  => $content,
-            'citation_style'=> $data['citation_style'] ?? null,
+            'citation_style' => $data['citation_style'] ?? null,
             'order_index'   => $data['order_index'] ?? 0,
             'created_by'    => $request->user()->id,
             'updated_by'    => $request->user()->id,
