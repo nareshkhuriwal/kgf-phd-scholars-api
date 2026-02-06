@@ -34,6 +34,8 @@ use App\Http\Controllers\CitationTypeController;
 use App\Http\Controllers\ReviewCitationController;
 use App\Http\Controllers\CitationRenderController;
 use App\Http\Controllers\AuthoredPaperCommentController;
+use App\Http\Controllers\AnalyticsReportController;
+
 
 // Public or rate-limited auth endpoints
 Route::post('/auth/login', [AuthController::class, 'login']);
@@ -220,6 +222,7 @@ Route::middleware('auth:sanctum')->group(function () {
 
     Route::get('/reports/chapters', [ChapterController::class, 'chapterOptions']);
 
+    
 
     // Users - list + show
     Route::get('/monitoring/users', [UserController::class, 'index']);
@@ -304,5 +307,7 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('/reports/saved/{id}/preview',  [ReportController::class, 'preview']);
     Route::post('/reports/saved/{id}/generate', [ReportController::class, 'generate']);
     Route::post('/reports/saved/bulk-delete', [SavedReportController::class, 'bulkDestroy']); // optional
+
+    Route::get('/reports/analytics/overview', [AnalyticsReportController::class,'overview']);
 
 });

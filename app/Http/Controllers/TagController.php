@@ -8,6 +8,7 @@ use Illuminate\Http\JsonResponse;
 use Illuminate\Support\Facades\Log;
 use App\Http\Controllers\Concerns\OwnerAuthorizes;
 use App\Support\ResolvesApiScope;
+use App\Models\ReviewTag;
 
 class TagController extends Controller
 {
@@ -50,12 +51,14 @@ class TagController extends Controller
         ]);
 
         $data = $request->validate([
-            'name' => 'required|string|max:50'
+            'name' => 'required|string|max:100',
+            'type' => 'required|in:problem,solution',
         ]);
 
         $tag = Tag::firstOrCreate(
             [
                 'name' => $data['name'],
+                'type' => $data['type'],
                 'created_by' => $userId
             ]
         );
@@ -86,6 +89,13 @@ class TagController extends Controller
             'tag_id' => $tag->id,
             'tag_owner' => $tag->created_by
         ]);
+
+        if (ReviewTag::where('tag_id', $tag->id)->exists()) {
+            return response()->json([
+                'message' => 'Tag is used in reviews and cannot be deleted'
+            ], 409);
+        }
+
 
         $tag->delete();
 

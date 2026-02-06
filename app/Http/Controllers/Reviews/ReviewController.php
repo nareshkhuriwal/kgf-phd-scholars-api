@@ -14,6 +14,10 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Log;
 use App\Http\Resources\FlatReviewResource;
 use App\Support\ResolvesApiScope;
+use App\Models\ReviewTag;
+use App\Models\Tag;
+use Illuminate\Support\Facades\DB;
+
 
 class ReviewController extends Controller
 {
@@ -69,7 +73,22 @@ class ReviewController extends Controller
 
         // Load paper with files and comments
         $review->load(['paper.files', 'paper.comments.user', 'paper.comments.children.user']);
-        
+
+
+        $review->problem_tags = ReviewTag::where('review_id', $review->id)
+            ->where('tag_type', 'problem')
+            ->pluck('tag_id')
+            ->values()
+            ->toArray();
+
+        $review->solution_tags = ReviewTag::where('review_id', $review->id)
+            ->where('tag_type', 'solution')
+            ->pluck('tag_id')
+            ->values()
+            ->toArray();
+
+
+
         Log::info('Returning review resource', [
             'review_id' => $review->id
         ]);
@@ -106,6 +125,7 @@ class ReviewController extends Controller
             'review_id' => $review->id,
             'status' => $review->status
         ]);
+
 
         // ---- Decode main HTML (CRITICAL) ----
         if ($request->filled('html')) {
@@ -186,6 +206,61 @@ class ReviewController extends Controller
                 'review_sections' => [],
             ]
         );
+
+        // ---------------------------------------------
+        // ✅ TAGS SAVE (SPECIAL CASE)
+        // ---------------------------------------------
+        if ($request->input('section_key') === 'tags') {
+
+            $data = $request->validate([
+                'problem_tags'  => 'array',
+                'problem_tags.*' => 'integer|exists:tags,id',
+                'solution_tags' => 'array',
+                'solution_tags.*' => 'integer|exists:tags,id',
+            ]);
+
+            DB::transaction(function () use ($paper, $request, $data) {
+
+                $review = Review::firstOrCreate(
+                    ['paper_id' => $paper->id, 'user_id' => $request->user()->id],
+                    [
+                        'status' => Review::STATUS_DRAFT,
+                        'review_sections' => [],
+                    ]
+                );
+
+                // 🔥 Remove old tags
+                ReviewTag::where('review_id', $review->id)->delete();
+
+                // 🔥 Insert problem tags
+                foreach ($data['problem_tags'] ?? [] as $tagId) {
+                    ReviewTag::create([
+                        'review_id' => $review->id,
+                        'tag_id'    => $tagId,
+                        'tag_type'  => 'problem',
+                    ]);
+                }
+
+                // 🔥 Insert solution tags
+                foreach ($data['solution_tags'] ?? [] as $tagId) {
+                    ReviewTag::create([
+                        'review_id' => $review->id,
+                        'tag_id'    => $tagId,
+                        'tag_type'  => 'solution',
+                    ]);
+                }
+
+                if ($review->status !== Review::STATUS_ARCHIVED) {
+                    $review->status = Review::STATUS_IN_PROGRESS;
+                    $review->save();
+                }
+            });
+
+            return response()->json([
+                'message' => 'Tags saved successfully'
+            ]);
+        }
+
 
         // ✅ DECODE HTML (CRITICAL)
         $decodedHtml = base64_decode($request->input('html'), true);
