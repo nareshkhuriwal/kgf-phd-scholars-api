@@ -17,6 +17,10 @@ class FlatReviewResource extends JsonResource
             'user_id'         => $this->user_id,
             'status'          => $this->status,
             'review_sections' => $this->review_sections ?? [],
+             // ✅ ADD THESE TWO LINES
+            'problem_tags'    => $this->problem_tags ?? [],
+            'solution_tags'   => $this->solution_tags ?? [],
+            
             'created_at'      => $this->created_at,
             'updated_at'      => $this->updated_at,
 
