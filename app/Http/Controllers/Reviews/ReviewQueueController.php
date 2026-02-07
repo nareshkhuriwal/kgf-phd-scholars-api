@@ -68,7 +68,7 @@ class ReviewQueueController extends Controller
             $q->whereHas(
                 'reviews',
                 fn($r) =>
-                $r->where('review_status', $status)
+                $r->where('status', $status)
                     ->whereIn('user_id', $userIds)
             );
         }
