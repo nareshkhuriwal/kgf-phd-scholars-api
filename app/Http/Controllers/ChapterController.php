@@ -46,7 +46,7 @@ class ChapterController extends Controller
 
         // Default paginated behavior (UI-safe)
         return response()->json(
-            $query->paginate($request->integer('per_page', 25))
+            $query->paginate($request->integer('per_page', 100))
         );
     }
 
