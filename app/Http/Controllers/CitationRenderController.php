@@ -1,276 +1,172 @@
 <?php
-// app/Http/Controllers/CitationRenderController.php
+
 namespace App\Http\Controllers;
 
 use App\Models\Review;
 use App\Services\CitationFormatter;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Log;
+use App\Http\Controllers\Concerns\OwnerAuthorizes;
 
 class CitationRenderController extends Controller
 {
+    use OwnerAuthorizes;
+
     /**
-     * Get citations in specified format
+     * Get citations for a paper in a given style
      */
     public function index($paperId, Request $request)
     {
-        Log::info('=== Citation Request Started ===', [
+        Log::info('📘 Citation render request started', [
             'paper_id' => $paperId,
-            'requested_style' => $request->query('style'),
-            'query_params' => $request->all(),
-            'url' => $request->fullUrl(),
+            'query' => $request->query(),
+            'user_id' => optional($request->user())->id,
         ]);
 
-        $style = $request->query('style', 'mla'); // Default to MLA
-        
-        Log::info('Style determined', [
-            'style' => $style,
-            'default_used' => !$request->has('style')
-        ]);
+        $style = strtolower($request->query('style', 'mla'));
 
-        // Validate style
+        // ----------------------------
+        // Validate citation style
+        // ----------------------------
         $availableStyles = array_keys(CitationFormatter::getAvailableStyles());
-        
-        if (!in_array(strtolower($style), $availableStyles)) {
-            Log::warning('Invalid citation style requested', [
+
+        if (!in_array($style, $availableStyles, true)) {
+            Log::warning('❌ Invalid citation style requested', [
+                'paper_id' => $paperId,
                 'requested_style' => $style,
                 'available_styles' => $availableStyles,
-                'paper_id' => $paperId,
             ]);
 
             return response()->json([
                 'error' => 'Invalid citation style',
-                'available_styles' => CitationFormatter::getAvailableStyles()
+                'available_styles' => $availableStyles,
             ], 400);
         }
 
-        Log::info('Style validated successfully', ['style' => $style]);
-
-        // Find review - handle both paper_id and id
-        Log::info('Searching for review', [
+        Log::info('✅ Citation style validated', [
             'paper_id' => $paperId,
-            'search_criteria' => 'paper_id OR id'
+            'style' => $style,
         ]);
 
+        // ----------------------------
+        // Load review with ordered citations
+        // ----------------------------
         $review = Review::where('paper_id', $paperId)
-            ->with('citations')
+            ->with([
+                'citations' => function ($q) {
+                    $q->with('type')
+                      ->orderBy('review_citations.first_used_order', 'asc');
+                }
+            ])
             ->first();
 
         if (!$review) {
-            Log::warning('Review not found', [
+            Log::warning('⚠️ Review not found for citation render', [
                 'paper_id' => $paperId,
-                'attempted_search' => ['paper_id', 'id']
             ]);
 
             return response()->json([
                 'style' => $style,
                 'count' => 0,
                 'citations' => [],
-                'message' => 'No review found for this paper'
+                'message' => 'No review found for this paper',
             ], 404);
         }
 
-        Log::info('Review found', [
+        Log::info('📄 Review loaded for citation render', [
             'review_id' => $review->id,
             'paper_id' => $review->paper_id,
-            'citations_count' => $review->citations ? $review->citations->count() : 0,
-            'has_citations_relation' => $review->relationLoaded('citations'),
+            'citation_count' => $review->citations->count(),
         ]);
 
-        if (!$review->citations || $review->citations->isEmpty()) {
-            Log::info('No citations found for review', [
+        // ----------------------------
+        // Authorization (owner-based)
+        // ----------------------------
+        $this->authorizeOwner($review, 'created_by');
+
+        Log::info('🔒 Authorization passed for citation render', [
+            'review_id' => $review->id,
+            'user_id' => optional($request->user())->id,
+        ]);
+
+        if ($review->citations->isEmpty()) {
+            Log::info('ℹ️ No citations to render', [
                 'review_id' => $review->id,
                 'paper_id' => $paperId,
-                'style' => $style,
             ]);
 
             return response()->json([
                 'style' => $style,
                 'count' => 0,
                 'citations' => [],
-                'message' => 'No citations found for this review'
             ]);
         }
 
-        Log::info('Formatting citations', [
-            'citations_count' => $review->citations->count(),
+        // ----------------------------
+        // Format citations
+        // ----------------------------
+        Log::info('🧾 Formatting citations', [
+            'review_id' => $review->id,
             'style' => $style,
-            'citation_keys' => $review->citations->pluck('citation_key')->toArray(),
+            'orders' => $review->citations->pluck('pivot.first_used_order')->toArray(),
         ]);
 
-        $citations = $review->citations->map(function($c, $i) use ($style) {
-            Log::debug('Formatting citation', [
-                'index' => $i + 1,
-                'citation_key' => $c->citation_key,
-                'citation_id' => $c->id,
-                'style' => $style,
-                'has_authors' => !empty($c->authors),
-                'has_title' => !empty($c->title),
-                'has_year' => !empty($c->year),
-            ]);
-
+        $citations = $review->citations->map(function ($c) use ($style, $review) {
             try {
-                $formattedText = CitationFormatter::format($c, $style, $i + 1);
-                
-                Log::debug('Citation formatted successfully', [
-                    'citation_key' => $c->citation_key,
-                    'formatted_length' => strlen($formattedText),
-                ]);
-
                 return [
-                    'key' => $c->citation_key,
-                    'text' => $formattedText,
                     'citation_id' => $c->id,
+                    'order'       => $c->pivot->first_used_order,
+                    'text'        => CitationFormatter::format(
+                        $c,
+                        $style,
+                        $c->pivot->first_used_order
+                    ),
+                    'title'   => $c->title,
                     'authors' => $c->authors,
-                    'title' => $c->title,
-                    'year' => $c->year,
+                    'year'    => $c->year,
+                    'type'    => optional($c->type)->code,
                 ];
-            } catch (\Exception $e) {
-                Log::error('Error formatting citation', [
-                    'citation_key' => $c->citation_key,
+            } catch (\Throwable $e) {
+                Log::error('🔥 Citation formatting failed', [
+                    'review_id' => $review->id,
                     'citation_id' => $c->id,
+                    'order' => $c->pivot->first_used_order,
                     'style' => $style,
                     'error' => $e->getMessage(),
-                    'trace' => $e->getTraceAsString(),
                 ]);
 
                 return [
-                    'key' => $c->citation_key,
-                    'text' => 'Error formatting citation',
                     'citation_id' => $c->id,
-                    'error' => $e->getMessage(),
+                    'order' => $c->pivot->first_used_order,
+                    'text' => '[Formatting error]',
+                    'error' => true,
                 ];
             }
         })->values();
 
-        Log::info('=== Citation Request Completed ===', [
+        Log::info('✅ Citation render completed', [
             'paper_id' => $paperId,
+            'review_id' => $review->id,
             'style' => $style,
-            'citations_count' => $citations->count(),
-            'success' => true,
+            'rendered_count' => $citations->count(),
         ]);
 
         return response()->json([
-            'style' => $style,
-            'count' => $citations->count(),
-            'citations' => $citations
+            'style'     => $style,
+            'count'     => $citations->count(),
+            'citations' => $citations,
         ]);
     }
 
     /**
-     * Get available citation styles
+     * Available citation styles
      */
     public function styles()
     {
-        Log::info('Fetching available citation styles');
-
-        $styles = CitationFormatter::getAvailableStyles();
-
-        Log::info('Citation styles retrieved', [
-            'count' => count($styles),
-            'styles' => array_keys($styles),
-        ]);
+        Log::info('📚 Citation styles requested');
 
         return response()->json([
-            'styles' => $styles
+            'styles' => CitationFormatter::getAvailableStyles(),
         ]);
-    }
-
-    /**
-     * Helper method to get citations by style
-     */
-    protected function getByStyle($paperId, $style)
-    {
-        Log::info('getByStyle called', [
-            'paper_id' => $paperId,
-            'style' => $style,
-            'method' => 'specific_endpoint'
-        ]);
-
-        $review = Review::where('paper_id', $paperId)
-            ->orWhere('id', $paperId)
-            ->with('citations')
-            ->first();
-
-        if (!$review || !$review->citations) {
-            Log::warning('No review or citations found in getByStyle', [
-                'paper_id' => $paperId,
-                'style' => $style,
-            ]);
-
-            return response()->json([
-                'style' => $style,
-                'count' => 0,
-                'citations' => [],
-                'message' => 'No citations found'
-            ]);
-        }
-
-        Log::info('Formatting citations in getByStyle', [
-            'paper_id' => $paperId,
-            'style' => $style,
-            'citations_count' => $review->citations->count(),
-        ]);
-
-        $citations = $review->citations->map(function($c, $i) use ($style) {
-            return [
-                'key' => $c->citation_key,
-                'text' => CitationFormatter::format($c, $style, $i + 1),
-                'citation_id' => $c->id,
-            ];
-        })->values();
-
-        Log::info('getByStyle completed', [
-            'paper_id' => $paperId,
-            'style' => $style,
-            'citations_returned' => $citations->count(),
-        ]);
-
-        return response()->json([
-            'style' => $style,
-            'count' => $citations->count(),
-            'citations' => $citations
-        ]);
-    }
-
-    // Specific format methods
-    public function ieee($paperId) { 
-        Log::info('IEEE endpoint called', ['paper_id' => $paperId]);
-        return $this->getByStyle($paperId, 'ieee'); 
-    }
-    
-    public function apa($paperId) { 
-        Log::info('APA endpoint called', ['paper_id' => $paperId]);
-        return $this->getByStyle($paperId, 'apa'); 
-    }
-    
-    public function mla($paperId) { 
-        Log::info('MLA endpoint called', ['paper_id' => $paperId]);
-        return $this->getByStyle($paperId, 'mla'); 
-    }
-    
-    public function chicago($paperId) { 
-        Log::info('Chicago endpoint called', ['paper_id' => $paperId]);
-        return $this->getByStyle($paperId, 'chicago'); 
-    }
-    
-    public function harvard($paperId) { 
-        Log::info('Harvard endpoint called', ['paper_id' => $paperId]);
-        return $this->getByStyle($paperId, 'harvard'); 
-    }
-    
-    public function vancouver($paperId) { 
-        Log::info('Vancouver endpoint called', ['paper_id' => $paperId]);
-        return $this->getByStyle($paperId, 'vancouver'); 
-    }
-    
-    public function acm($paperId) { 
-        Log::info('ACM endpoint called', ['paper_id' => $paperId]);
-        return $this->getByStyle($paperId, 'acm'); 
-    }
-    
-    public function springer($paperId) { 
-        Log::info('Springer endpoint called', ['paper_id' => $paperId]);
-        return $this->getByStyle($paperId, 'springer'); 
     }
 }
