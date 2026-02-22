@@ -252,7 +252,8 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('/citations', [CitationController::class, 'store']);
     Route::post('/reviews/{id}/citations/sync', [ReviewCitationController::class, 'sync']);
     // Route::get('/reviews/{id}/citations', [ReviewCitationController::class, 'list']); // ⚠️ This might also conflict!
-    
+    Route::post('/papers/{paperId}/review-citations/sync', [ReviewCitationController::class, 'sync']);
+
     // Get available styles
     Route::get('/citation-styles', [CitationRenderController::class, 'styles']);
     Route::get('/settings/citation-styles', [SettingsController::class, 'citationStyles']);
