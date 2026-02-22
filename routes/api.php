@@ -35,7 +35,7 @@ use App\Http\Controllers\ReviewCitationController;
 use App\Http\Controllers\CitationRenderController;
 use App\Http\Controllers\AuthoredPaperCommentController;
 use App\Http\Controllers\AnalyticsReportController;
-
+use App\Http\Controllers\PaperCitationController;
 
 // Public or rate-limited auth endpoints
 Route::post('/auth/login', [AuthController::class, 'login']);
@@ -159,7 +159,7 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::put('/papers/{paper}/comments/{comment}', [PaperCommentController::class, 'update']);
     Route::delete('/papers/{paper}/comments/{comment}', [PaperCommentController::class, 'destroy']);
 
-    
+    Route::get('/papers/{paperId}/citations/search', [PaperCitationController::class, 'search']);
 
     Route::get('/my-papers', [MyPaperController::class, 'index']);
     Route::post('/my-papers', [MyPaperController::class, 'store']);
