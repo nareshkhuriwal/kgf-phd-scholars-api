@@ -3,6 +3,7 @@
 namespace App\Http\Controllers;
 
 use App\Http\Controllers\Concerns\OwnerAuthorizes;
+use App\Http\Controllers\Concerns\ResolvesPaperUploadDisk;
 use App\Models\Paper;
 use App\Models\PaperFile;
 use Illuminate\Contracts\Filesystem\FileNotFoundException;
@@ -16,15 +17,10 @@ use Symfony\Component\HttpFoundation\StreamedResponse;
 
 class PaperFileController extends Controller
 {
-    use OwnerAuthorizes;
+    use OwnerAuthorizes, ResolvesPaperUploadDisk;
 
     private const MAX_FILE_SIZE_KB = 51200; // 50 MB
     private const ALLOWED_MIMES = 'pdf,doc,docx';
-
-    private function uploadDisk(): string
-    {
-        return config('filesystems.default_upload_disk', env('AZURE_STORAGE_DISK', 'azure'));
-    }
 
     private function papersSubdir(): string
     {
@@ -144,6 +140,8 @@ class PaperFileController extends Controller
             return response()->json([
                 'id'             => $pf->id,
                 'paper_id'       => $pf->paper_id,
+                'disk'           => $pf->disk,
+                'storage_provider' => $this->storageProviderForDisk($pf->disk),
                 'original_name'  => $pf->original_name,
                 'mime'           => $pf->mime,
                 'size_bytes'     => $pf->size_bytes,

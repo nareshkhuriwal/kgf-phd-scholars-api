@@ -3,6 +3,7 @@
 namespace App\Http\Controllers;
 
 use App\Http\Controllers\Concerns\OwnerAuthorizes;
+use App\Http\Controllers\Concerns\ResolvesPaperUploadDisk;
 use App\Http\Requests\BulkDeletePapersRequest;
 use App\Http\Requests\PaperRequest;
 use App\Http\Resources\PaperResource;
@@ -20,7 +21,7 @@ use Illuminate\Support\Str;
 
 class PaperController extends Controller
 {
-    use OwnerAuthorizes, ResolvesApiScope;
+    use OwnerAuthorizes, ResolvesApiScope, ResolvesPaperUploadDisk;
 
     public function index(Request $req)
     {
@@ -594,11 +595,6 @@ class PaperController extends Controller
 
             throw $e;
         }
-    }
-
-    private function uploadDisk(): string
-    {
-        return config('filesystems.default_upload_disk', env('AZURE_STORAGE_DISK', 'azure'));
     }
 
     private function paperSubdir(): string

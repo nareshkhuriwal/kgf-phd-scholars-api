@@ -2,6 +2,14 @@
 use Illuminate\Support\Facades\Route;
 use Illuminate\Support\Facades\Log;
 
+// Fallback for frameworks/middleware that try redirecting to "login"
+// (especially when Accept header isn't application/json, e.g. <embed> PDF requests).
+Route::get('/login', function () {
+    return response()->json([
+        'message' => 'Unauthenticated.',
+    ], 401);
+})->name('login');
+
 Route::get('/uploads/{path}', function ($path) {
     Log::info('[UPLOAD ROUTE HIT]', [
         'raw_path' => $path,
