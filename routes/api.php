@@ -38,6 +38,12 @@ use App\Http\Controllers\AnalyticsReportController;
 use App\Http\Controllers\PaperCitationController;
 
 
+// Handle CORS preflight at route level for production proxies/servers that
+// may not pass OPTIONS cleanly through the normal middleware chain.
+Route::options('/{any}', function () {
+    return response()->noContent();
+})->where('any', '.*');
+
 // Public or rate-limited auth endpoints
 Route::post('/auth/login', [AuthController::class, 'login']);
 Route::post('/auth/register', [AuthController::class, 'register']);   // public
