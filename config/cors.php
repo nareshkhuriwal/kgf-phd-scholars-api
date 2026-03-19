@@ -4,9 +4,10 @@ return [
 
     'paths' => [
         'api/*',
-        'sanctum/csrf-cookie',
+        'auth/*',
         'login',
         'logout',
+        'sanctum/csrf-cookie',
         'files/*',
         'uploads/*',
     ],
@@ -25,7 +26,7 @@ return [
         '^https:\/\/([a-z0-9-]+\.)?khuriwalgroup\.com$',
     ],
 
-    'allowed_headers' => ['*', 'Range', 'X-Requested-With', 'Authorization'],
+    'allowed_headers' => ['*', 'Range', 'X-Requested-With', 'Authorization', 'Content-Type', 'Accept', 'Origin'],
 
     'exposed_headers' => [
         'Accept-Ranges',
