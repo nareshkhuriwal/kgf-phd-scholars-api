@@ -16,6 +16,17 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | Paper Upload Disk (Library / Papers)
+    |--------------------------------------------------------------------------
+    |
+    | Keep all paper file uploads on Azure Data Lake-compatible storage by
+    | default. You can override with PAPERS_UPLOAD_DISK if required.
+    |
+    */
+    'default_upload_disk' => env('PAPERS_UPLOAD_DISK', env('AZURE_STORAGE_DISK', 'azure')),
+
+    /*
+    |--------------------------------------------------------------------------
     | Filesystem Disks
     |--------------------------------------------------------------------------
     |

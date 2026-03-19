@@ -14,6 +14,10 @@ class PaperResource extends JsonResource
             $firstPdf = $this->files->first(fn($f) => str_contains($f->mime ?? '', 'pdf') || str_ends_with(strtolower($f->original_name ?? ''), '.pdf'));
             $primaryUrl = optional($firstPdf)->url ?? optional($this->files->first())->url;
         }
+        $primaryDisk = $this->relationLoaded('files') && $this->files->count()
+            ? (($this->files->first()->disk ?? null) ?: config('filesystems.default_upload_disk', 'azure'))
+            : config('filesystems.default_upload_disk', 'azure');
+        $storageProvider = $primaryDisk === 'azure' ? 'azure-datalake' : 'filesystem';
 
         return [
             'id'            => $this->id,
@@ -39,6 +43,7 @@ class PaperResource extends JsonResource
 
             // optional convenience for the viewer
             'pdf_url' => $primaryUrl,
+            'storage_provider' => $storageProvider,
 
             // Creator name
             'created_by' => $this->whenLoaded('creator', 
@@ -56,6 +61,8 @@ class PaperResource extends JsonResource
                 $this->files->map(fn($f) => [
                     'id'            => $f->id,
                     'url'           => $f->url, // accessor builds Storage::disk(...)->url()
+                    'disk'          => $f->disk,
+                    'storage_provider' => ($f->disk === 'azure' ? 'azure-datalake' : 'filesystem'),
                     'original_name' => $f->original_name,
                     'mime'          => $f->mime,
                     'size_bytes'    => $f->size_bytes,

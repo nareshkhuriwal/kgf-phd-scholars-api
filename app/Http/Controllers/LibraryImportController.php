@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers;
 
+use App\Http\Controllers\Concerns\ResolvesPaperUploadDisk;
 use App\Models\Paper;
 use Illuminate\Http\Request;
 use Illuminate\Http\UploadedFile;
@@ -16,6 +17,8 @@ use Symfony\Component\HttpFoundation\StreamedResponse;
 
 class LibraryImportController extends Controller
 {
+    use ResolvesPaperUploadDisk;
+
     private const MAX_UPLOAD_SIZE_KB = 51200; // 50 MB
     private const MAX_CSV_SIZE_KB    = 20480; // 20 MB
     private const REMOTE_TIMEOUT_SEC = 60;
@@ -195,6 +198,7 @@ class LibraryImportController extends Controller
 
         return response()->json([
             'message' => 'Import finished.',
+            'storage_provider' => $this->storageProviderForDisk($this->uploadDisk()),
             'created' => $created,
             'skipped' => $skipped,
             'errors'  => $errors,
@@ -289,11 +293,6 @@ class LibraryImportController extends Controller
     }
 
     /* ---------------- Storage Helpers ---------------- */
-
-    private function uploadDisk(): string
-    {
-        return config('filesystems.default_upload_disk', env('AZURE_STORAGE_DISK', 'azure'));
-    }
 
     private function librarySubdir(): string
     {
