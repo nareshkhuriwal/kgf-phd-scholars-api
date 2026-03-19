@@ -2,18 +2,24 @@
 
 namespace App\Http\Controllers;
 
+use App\Models\Paper;
 use Illuminate\Http\Request;
 use Illuminate\Http\UploadedFile;
-use Illuminate\Support\Facades\Storage;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
+use League\Csv\Reader;
 use Symfony\Component\HttpFoundation\Response;
-use App\Models\Paper;
-use League\Csv\Reader; // composer require league/csv
 use Symfony\Component\HttpFoundation\StreamedResponse;
 
 class LibraryImportController extends Controller
 {
+    private const MAX_UPLOAD_SIZE_KB = 51200; // 50 MB
+    private const MAX_CSV_SIZE_KB    = 20480; // 20 MB
+    private const REMOTE_TIMEOUT_SEC = 60;
+    private const REMOTE_MAX_BYTES   = 52428800; // 50 MB
 
     private const CSV_FIELD_MAP = [
         'paper_code' => 'paper_code',
@@ -34,10 +40,8 @@ class LibraryImportController extends Controller
 
     /**
      * POST /api/library/import
-     * FormData:  files[] (PDFs etc), csv (optional), meta(JSON) => { sources:{ urls:[], bibtex:string } }
-     * JSON:      { sources:{ urls:[], bibtex:string } }  // files ignored unless base64 (not supported here)
-     *
-     * Returns: { message, created: Paper[], skipped:[], errors:[] }
+     * FormData: files[] (optional), csv (optional), meta(JSON) => { sources:{ urls:[], bibtex:string } }
+     * JSON:     { sources:{ urls:[], bibtex:string } }
      */
     public function import(Request $request)
     {
@@ -53,24 +57,23 @@ class LibraryImportController extends Controller
         $skipped = [];
         $errors  = [];
 
-        // --- plan / quota from User model helpers ---
         $user = $request->user() ?? abort(401, 'Unauthenticated');
 
-        // Optional: disallow imports if plan expired
-        if (method_exists($user, 'planIsActive') && ! $user->planIsActive()) {
+        if (method_exists($user, 'planIsActive') && !$user->planIsActive()) {
             return response()->json([
                 'message' => 'Your subscription/plan has expired. Please renew to continue importing.',
             ], Response::HTTP_FORBIDDEN);
         }
 
-        // remaining slots (model returns PHP_INT_MAX for unlimited)
-        $remaining = method_exists($user, 'remainingPaperQuota') ? $user->remainingPaperQuota() : PHP_INT_MAX;
+        $remaining = method_exists($user, 'remainingPaperQuota')
+            ? $user->remainingPaperQuota()
+            : PHP_INT_MAX;
 
-        // 1) Handle uploaded files
+        // 1) Uploaded files
         foreach ($files as $file) {
             if ($remaining <= 0) {
                 $skipped[] = [
-                    'name' => $file->getClientOriginalName(),
+                    'name'   => $file->getClientOriginalName(),
                     'reason' => 'Upload quota exceeded for your plan',
                 ];
                 continue;
@@ -81,37 +84,66 @@ class LibraryImportController extends Controller
                 $created[] = $paper->fresh('files');
                 $remaining--;
             } catch (\Throwable $e) {
-                $errors[] = ['name' => $file->getClientOriginalName(), 'error' => $e->getMessage()];
+                Log::error('Library file upload import failed', [
+                    'user_id' => $user->id ?? null,
+                    'name'    => $file->getClientOriginalName(),
+                    'error'   => $e->getMessage(),
+                ]);
+
+                $errors[] = [
+                    'name'  => $file->getClientOriginalName(),
+                    'error' => $e->getMessage(),
+                ];
             }
         }
 
-        // 2) Handle URLs (download, then attach)
+        // 2) URL imports
         foreach ($sources['urls'] as $url) {
             if ($remaining <= 0) {
-                $skipped[] = ['url' => $url, 'reason' => 'Upload quota exceeded for your plan'];
+                $skipped[] = [
+                    'url'    => $url,
+                    'reason' => 'Upload quota exceeded for your plan',
+                ];
                 continue;
             }
 
             try {
                 $paper = $this->importFromUrl($request, $url);
+
                 if ($paper) {
                     $created[] = $paper->fresh('files');
                     $remaining--;
                 } else {
-                    $skipped[] = ['url' => $url, 'reason' => 'Unsupported or empty'];
+                    $skipped[] = [
+                        'url'    => $url,
+                        'reason' => 'Unsupported or empty',
+                    ];
                 }
             } catch (\Throwable $e) {
-                $errors[] = ['url' => $url, 'error' => $e->getMessage()];
+                Log::error('Library URL import failed', [
+                    'user_id' => $user->id ?? null,
+                    'url'     => $url,
+                    'error'   => $e->getMessage(),
+                ]);
+
+                $errors[] = [
+                    'url'   => $url,
+                    'error' => $e->getMessage(),
+                ];
             }
         }
 
-        // 3) Handle pasted BibTeX/RIS
+        // 3) BibTeX / RIS
         if (!empty($sources['bibtex'])) {
             try {
                 $entries = $this->parseBibOrRis($sources['bibtex']);
+
                 foreach ($entries as $entry) {
                     if ($remaining <= 0) {
-                        $skipped[] = ['entry' => $entry['title'] ?? '(unknown)', 'reason' => 'Upload quota exceeded for your plan'];
+                        $skipped[] = [
+                            'entry'  => $entry['title'] ?? '(unknown)',
+                            'reason' => 'Upload quota exceeded for your plan',
+                        ];
                         continue;
                     }
 
@@ -120,15 +152,27 @@ class LibraryImportController extends Controller
                         $created[] = $paper->fresh('files');
                         $remaining--;
                     } catch (\Throwable $e) {
-                        $errors[] = ['entry' => $entry['title'] ?? '(unknown)', 'error' => $e->getMessage()];
+                        Log::error('Library BibTeX/RIS import entry failed', [
+                            'user_id' => $user->id ?? null,
+                            'entry'   => $entry['title'] ?? '(unknown)',
+                            'error'   => $e->getMessage(),
+                        ]);
+
+                        $errors[] = [
+                            'entry' => $entry['title'] ?? '(unknown)',
+                            'error' => $e->getMessage(),
+                        ];
                     }
                 }
             } catch (\Throwable $e) {
-                $errors[] = ['bibtex' => 'parse', 'error' => $e->getMessage()];
+                $errors[] = [
+                    'bibtex' => 'parse',
+                    'error'  => $e->getMessage(),
+                ];
             }
         }
 
-        // 4) Handle CSV (title,authors,year,doi,url,pdf_url,…)
+        // 4) CSV
         if ($csvFile instanceof UploadedFile) {
             try {
                 [$c2, $s2, $e2] = $this->importFromCsvWithQuota($request, $csvFile, $remaining);
@@ -136,7 +180,16 @@ class LibraryImportController extends Controller
                 array_push($skipped, ...$s2);
                 array_push($errors,  ...$e2);
             } catch (\Throwable $e) {
-                $errors[] = ['csv' => $csvFile->getClientOriginalName(), 'error' => $e->getMessage()];
+                Log::error('Library CSV import failed', [
+                    'user_id' => $user->id ?? null,
+                    'csv'     => $csvFile->getClientOriginalName(),
+                    'error'   => $e->getMessage(),
+                ]);
+
+                $errors[] = [
+                    'csv'   => $csvFile->getClientOriginalName(),
+                    'error' => $e->getMessage(),
+                ];
             }
         }
 
@@ -151,8 +204,7 @@ class LibraryImportController extends Controller
     /* ---------------- Normalization ---------------- */
 
     /**
-     * Normalize input from either multipart or JSON.
-     * @return array [UploadedFile[], UploadedFile|null, ['urls'=>[], 'bibtex'=>string]]
+     * @return array{0: array<int, UploadedFile>, 1: UploadedFile|null, 2: array{urls: array<int, string>, bibtex: string}}
      */
     private function normalizePayload(Request $request): array
     {
@@ -160,42 +212,34 @@ class LibraryImportController extends Controller
         $csvFile = null;
         $sources = ['urls' => [], 'bibtex' => ''];
 
-        // ---------------- Multipart/FormData ----------------
         if (
             $request->isMethod('post') &&
-            Str::startsWith($request->header('Content-Type', ''), 'multipart/form-data')
+            Str::startsWith((string) $request->header('Content-Type', ''), 'multipart/form-data')
         ) {
-            // Files[]
             if ($request->hasFile('files')) {
                 $request->validate([
                     'files'   => ['array', 'min:1'],
-                    'files.*' => ['file', 'max:51200'], // 50 MB
+                    'files.*' => ['file', 'max:' . self::MAX_UPLOAD_SIZE_KB],
                 ]);
+
                 $files = $request->file('files', []);
             }
 
-            // CSV
             if ($request->hasFile('csv')) {
                 $request->validate([
-                    'csv' => ['file', 'mimes:csv,txt', 'max:20480'], // 20 MB
+                    'csv' => ['file', 'mimes:csv,txt', 'max:' . self::MAX_CSV_SIZE_KB],
                 ]);
+
                 $csvFile = $request->file('csv');
             }
 
-            // meta JSON (optional)
             $meta = [];
             if ($request->filled('meta')) {
                 $meta = json_decode((string) $request->input('meta'), true) ?: [];
             }
 
-            // URLs may come directly OR inside meta.sources
             $directUrlsRaw = $request->input('urls', []);
-
-            // urls may arrive as:
-            // 1) array
-            // 2) JSON string: '["url1","url2"]'
-            // 3) plain string with newlines
-            $directUrls = [];
+            $directUrls    = [];
 
             if (is_array($directUrlsRaw)) {
                 $directUrls = $directUrlsRaw;
@@ -204,31 +248,28 @@ class LibraryImportController extends Controller
                 if (is_array($decoded)) {
                     $directUrls = $decoded;
                 } else {
-                    // fallback: treat as newline-separated textarea
-                    $directUrls = preg_split('/\r\n|\r|\n/', $directUrlsRaw);
+                    $directUrls = preg_split('/\r\n|\r|\n/', $directUrlsRaw) ?: [];
                 }
             }
-            $metaUrls   = $meta['sources']['urls'] ?? [];
+
+            $metaUrls = $meta['sources']['urls'] ?? [];
 
             $allUrls = array_merge(
                 is_array($directUrls) ? $directUrls : [],
-                is_array($metaUrls)   ? $metaUrls   : []
+                is_array($metaUrls) ? $metaUrls : []
             );
 
             $sources['urls'] = array_values(array_unique(
                 array_filter(
-                    array_map('trim', $allUrls),
-                    fn ($u) => is_string($u) && $u !== ''
+                    array_map(fn ($u) => is_string($u) ? trim($u) : '', $allUrls),
+                    fn ($u) => $u !== ''
                 )
             ));
 
             $sources['bibtex'] = is_string($meta['sources']['bibtex'] ?? null)
                 ? trim($meta['sources']['bibtex'])
                 : '';
-        }
-
-        // ---------------- JSON Body ----------------
-        else {
+        } else {
             $payload = $request->json()->all();
 
             $urls = $payload['sources']['urls'] ?? [];
@@ -236,8 +277,8 @@ class LibraryImportController extends Controller
 
             $sources['urls'] = array_values(array_unique(
                 array_filter(
-                    array_map('trim', is_array($urls) ? $urls : []),
-                    fn ($u) => is_string($u) && $u !== ''
+                    array_map(fn ($u) => is_string($u) ? trim($u) : '', is_array($urls) ? $urls : []),
+                    fn ($u) => $u !== ''
                 )
             ));
 
@@ -247,143 +288,302 @@ class LibraryImportController extends Controller
         return [$files, $csvFile, $sources];
     }
 
+    /* ---------------- Storage Helpers ---------------- */
 
-    /* ---------------- Files (Option-B) ---------------- */
-
-    /**
-     * Create Paper first, then create PaperFile (attached upload).
-     */
-    private function storeUploadedPaper(Request $request, UploadedFile $file): Paper
+    private function uploadDisk(): string
     {
-        // Create the paper row first
-        $title = $this->titleFromFilename($file->getClientOriginalName());
-        $paper = Paper::create([
-            'title'      => $title,
-            'created_by' => $request->user()->id ?? null,
-            'source'     => 'upload',
-        ]);
-
-        // Store the file on uploads disk
-        $disk   = 'uploads';
-        $subdir = now()->format('Y/m');
-        $path   = $file->store("library/{$subdir}", $disk);
-
-        // Attach it into paper_files
-        $paper->files()->create([
-            'disk'          => $disk,
-            'path'          => $path,
-            'original_name' => $file->getClientOriginalName(),
-            'mime'          => $file->getClientMimeType(),
-            'size_bytes'    => $file->getSize(),
-            'checksum'      => hash_file('sha256', $file->getRealPath()),
-            'uploaded_by'   => $request->user()->id ?? null,
-        ]);
-
-        return $paper;
+        return config('filesystems.default_upload_disk', env('AZURE_STORAGE_DISK', 'azure'));
     }
 
-    /* ---------------- URLs (Option-B) ---------------- */
-
-    /**
-     * Download from URL, create Paper, then create PaperFile.
-     */
-    private function importFromUrl(Request $request, string $url): ?Paper
+    private function librarySubdir(): string
     {
-        $url = trim($url);
-        if ($url === '') return null;
+        return 'library/' . now()->format('Y/m');
+    }
 
-        $resp = Http::timeout(20)->withHeaders([
-            'User-Agent' => 'KGF-LibraryBot/1.0',
-            'Accept'     => 'application/pdf,application/octet-stream,*/*',
-        ])->get($url);
+    private function buildStoragePath(string $originalName): string
+    {
+        $safeName = preg_replace('/[^A-Za-z0-9\.\-_]/', '_', trim($originalName));
+        $safeName = ltrim((string) $safeName, '.');
 
-        if (!$resp->ok()) {
-            throw new \RuntimeException("HTTP {$resp->status()} for $url");
+        if ($safeName === '') {
+            $safeName = 'file_' . now()->timestamp;
         }
 
-        $bytes = $resp->body();
-        if (!strlen($bytes)) return null;
+        return $this->librarySubdir() . '/' . Str::uuid()->toString() . '_' . $safeName;
+    }
 
-        $mime   = $resp->header('Content-Type', 'application/octet-stream');
-        $disk   = 'uploads';
-        $subdir = now()->format('Y/m');
-        $ext    = $this->extensionFromMime($mime) ?? 'bin';
-        $name   = basename(parse_url($url, PHP_URL_PATH) ?: 'download');
-        if (!Str::contains($name, '.')) $name .= ".{$ext}";
+    private function normalizeMime(?string $mime, string $originalName): string
+    {
+        $mime = strtolower(trim((string) $mime));
 
-        $path = "library/{$subdir}/" . Str::random(10) . "_" . $name;
-        Storage::disk($disk)->put($path, $bytes);
+        if ($mime !== '') {
+            $mime = explode(';', $mime)[0];
+        }
 
-        // Create Paper first
-        $paper = Paper::create([
-            'title'      => $this->titleFromFilename($name),
-            'doi'        => null,
-            'year'       => null,
-            'created_by' => $request->user()->id ?? null,
-            'source'     => 'url',
-            'url'        => $url,
-        ]);
+        if ($mime !== '') {
+            return $mime;
+        }
 
-        // Attach PaperFile
-        $paper->files()->create([
-            'disk'          => $disk,
-            'path'          => $path,
-            'original_name' => $name,
-            'mime'          => $mime,
-            'size_bytes'    => strlen($bytes),
-            'checksum'      => hash('sha256', $bytes),
-            'uploaded_by'   => $request->user()->id ?? null,
-        ]);
+        $ext = strtolower(pathinfo($originalName, PATHINFO_EXTENSION));
 
-        return $paper;
+        return match ($ext) {
+            'pdf'  => 'application/pdf',
+            'txt'  => 'text/plain',
+            'csv'  => 'text/csv',
+            'doc'  => 'application/msword',
+            'docx' => 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+            'zip'  => 'application/zip',
+            default => 'application/octet-stream',
+        };
     }
 
     private function extensionFromMime(?string $mime): ?string
     {
+        $mime = $this->normalizeMime($mime, 'file.bin');
+
         $map = [
-            'application/pdf' => 'pdf',
-            'text/plain'      => 'txt',
-            'text/csv'        => 'csv',
-            'application/csv' => 'csv',
-            'application/zip' => 'zip',
+            'application/pdf'                                                        => 'pdf',
+            'text/plain'                                                             => 'txt',
+            'text/csv'                                                               => 'csv',
+            'application/csv'                                                        => 'csv',
+            'application/zip'                                                        => 'zip',
+            'application/msword'                                                     => 'doc',
+            'application/vnd.openxmlformats-officedocument.wordprocessingml.document' => 'docx',
         ];
+
         return $map[$mime] ?? null;
     }
 
-    /* ---------------- BibTeX / RIS (Option-B) ---------------- */
+    private function ensureRemoteFileWithinLimit($response, ?string $label = null): void
+    {
+        $contentLength = (int) $response->header('Content-Length', 0);
+
+        if ($contentLength > 0 && $contentLength > self::REMOTE_MAX_BYTES) {
+            throw new \RuntimeException(($label ? "{$label}: " : '') . 'Remote file exceeds 50 MB limit.');
+        }
+    }
+
+    private function fetchRemoteFile(string $url, array $accept = ['application/pdf', 'application/octet-stream', '*/*']): ?array
+    {
+        $url = trim($url);
+        if ($url === '') {
+            return null;
+        }
+
+        $response = Http::timeout(self::REMOTE_TIMEOUT_SEC)
+            ->withHeaders([
+                'User-Agent' => 'KGF-LibraryBot/1.0',
+                'Accept'     => implode(',', $accept),
+            ])
+            ->get($url);
+
+        if (!$response->ok()) {
+            throw new \RuntimeException("HTTP {$response->status()} for {$url}");
+        }
+
+        $this->ensureRemoteFileWithinLimit($response, $url);
+
+        $bytes = $response->body();
+        if ($bytes === '' || $bytes === null) {
+            return null;
+        }
+
+        if (strlen($bytes) > self::REMOTE_MAX_BYTES) {
+            throw new \RuntimeException("Remote file exceeds 50 MB limit for {$url}");
+        }
+
+        $originalName = basename(parse_url($url, PHP_URL_PATH) ?: 'download');
+        $mime = $this->normalizeMime($response->header('Content-Type', 'application/octet-stream'), $originalName);
+
+        if (!Str::contains($originalName, '.')) {
+            $ext = $this->extensionFromMime($mime) ?? 'bin';
+            $originalName .= '.' . $ext;
+        }
+
+        return [
+            'bytes'         => $bytes,
+            'mime'          => $mime,
+            'original_name' => $originalName,
+            'size_bytes'    => strlen($bytes),
+            'checksum'      => hash('sha256', $bytes),
+        ];
+    }
+
+    private function uploadBytesToStorage(string $path, string $bytes): void
+    {
+        Storage::disk($this->uploadDisk())->put($path, $bytes);
+    }
+
+    private function uploadStreamToStorage(string $path, $stream): void
+    {
+        Storage::disk($this->uploadDisk())->writeStream($path, $stream);
+    }
+
+    /* ---------------- Files ---------------- */
+
+    private function storeUploadedPaper(Request $request, UploadedFile $file): Paper
+    {
+        $disk         = $this->uploadDisk();
+        $originalName = $file->getClientOriginalName();
+        $mime         = $this->normalizeMime($file->getClientMimeType(), $originalName);
+        $sizeBytes    = $file->getSize();
+        $checksum     = hash_file('sha256', $file->getRealPath());
+        $path         = $this->buildStoragePath($originalName);
+
+        $stream = fopen($file->getRealPath(), 'rb');
+        if ($stream === false) {
+            throw new \RuntimeException('Unable to open uploaded file stream.');
+        }
+
+        $uploaded = false;
+
+        try {
+            $this->uploadStreamToStorage($path, $stream);
+            $uploaded = true;
+        } finally {
+            if (is_resource($stream)) {
+                fclose($stream);
+            }
+        }
+
+        try {
+            return DB::transaction(function () use ($request, $disk, $path, $originalName, $mime, $sizeBytes, $checksum) {
+                $paper = Paper::create([
+                    'title'      => $this->titleFromFilename($originalName),
+                    'created_by' => $request->user()->id ?? null,
+                    'source'     => 'upload',
+                ]);
+
+                $paper->files()->create([
+                    'disk'          => $disk,
+                    'path'          => $path,
+                    'original_name' => $originalName,
+                    'mime'          => $mime,
+                    'size_bytes'    => $sizeBytes,
+                    'checksum'      => $checksum,
+                    'uploaded_by'   => $request->user()->id ?? null,
+                ]);
+
+                return $paper;
+            }, 3);
+        } catch (\Throwable $e) {
+            if ($uploaded) {
+                try {
+                    Storage::disk($disk)->delete($path);
+                } catch (\Throwable $cleanupEx) {
+                    Log::warning('Cleanup failed after uploaded paper DB transaction failure', [
+                        'disk'  => $disk,
+                        'path'  => $path,
+                        'error' => $cleanupEx->getMessage(),
+                    ]);
+                }
+            }
+
+            throw $e;
+        }
+    }
+
+    /* ---------------- URLs ---------------- */
+
+    private function importFromUrl(Request $request, string $url): ?Paper
+    {
+        $remote = $this->fetchRemoteFile($url);
+        if (!$remote) {
+            return null;
+        }
+
+        $disk = $this->uploadDisk();
+        $path = $this->buildStoragePath($remote['original_name']);
+
+        $this->uploadBytesToStorage($path, $remote['bytes']);
+
+        try {
+            return DB::transaction(function () use ($request, $url, $disk, $path, $remote) {
+                $paper = Paper::create([
+                    'title'      => $this->titleFromFilename($remote['original_name']),
+                    'doi'        => null,
+                    'year'       => null,
+                    'created_by' => $request->user()->id ?? null,
+                    'source'     => 'url',
+                    'url'        => $url,
+                ]);
+
+                $paper->files()->create([
+                    'disk'          => $disk,
+                    'path'          => $path,
+                    'original_name' => $remote['original_name'],
+                    'mime'          => $remote['mime'],
+                    'size_bytes'    => $remote['size_bytes'],
+                    'checksum'      => $remote['checksum'],
+                    'uploaded_by'   => $request->user()->id ?? null,
+                ]);
+
+                return $paper;
+            }, 3);
+        } catch (\Throwable $e) {
+            try {
+                Storage::disk($disk)->delete($path);
+            } catch (\Throwable $cleanupEx) {
+                Log::warning('Cleanup failed after URL import DB transaction failure', [
+                    'url'   => $url,
+                    'disk'  => $disk,
+                    'path'  => $path,
+                    'error' => $cleanupEx->getMessage(),
+                ]);
+            }
+
+            throw $e;
+        }
+    }
+
+    /* ---------------- BibTeX / RIS ---------------- */
 
     private function parseBibOrRis(string $text): array
     {
         $text = trim($text);
-        if ($text === '') return [];
+        if ($text === '') {
+            return [];
+        }
 
-        if (Str::contains(Str::lower($text), '@article') || Str::contains(Str::lower($text), '@inproceedings')) {
+        if (
+            Str::contains(Str::lower($text), '@article') ||
+            Str::contains(Str::lower($text), '@inproceedings') ||
+            Str::contains(Str::lower($text), '@book') ||
+            Str::contains(Str::lower($text), '@misc')
+        ) {
             return $this->parseBibtex($text);
         }
+
         return $this->parseRis($text);
     }
 
     private function parseBibtex(string $bib): array
     {
         $entries = [];
+
         foreach (preg_split('/\n@/i', "\n" . $bib) as $chunk) {
             $chunk = trim($chunk);
-            if ($chunk === '') continue;
+            if ($chunk === '') {
+                continue;
+            }
+
             $title   = $this->matchField($chunk, 'title');
             $author  = $this->matchField($chunk, 'author');
             $year    = $this->matchField($chunk, 'year');
             $doi     = $this->matchField($chunk, 'doi');
             $url     = $this->matchField($chunk, 'url');
-            $pdf_url = $this->matchField($chunk, 'pdf');
+            $pdfUrl  = $this->matchField($chunk, 'pdf');
+
             $entries[] = [
                 'title'   => $this->cleanBraces($title),
                 'authors' => $this->cleanBraces($author),
                 'year'    => $this->cleanBraces($year),
                 'doi'     => $this->cleanBraces($doi),
                 'url'     => $this->cleanBraces($url),
-                'pdf_url' => $this->cleanBraces($pdf_url),
+                'pdf_url' => $this->cleanBraces($pdfUrl),
             ];
         }
+
         return $entries;
     }
 
@@ -391,279 +591,373 @@ class LibraryImportController extends Controller
     {
         $entries = [];
         $current = [];
+
         foreach (preg_split('/\r\n|\r|\n/', $ris) as $line) {
-            if (preg_match('/^TY\s*-\s*/', $line)) $current = [];
-            if (preg_match('/^TI\s*-\s*(.*)$/', $line, $m)) $current['title'] = trim($m[1]);
+            if (preg_match('/^TY\s*-\s*/', $line)) {
+                $current = [];
+            }
+
+            if (preg_match('/^TI\s*-\s*(.*)$/', $line, $m)) {
+                $current['title'] = trim($m[1]);
+            }
+
             if (preg_match('/^AU\s*-\s*(.*)$/', $line, $m)) {
                 $current['authors'] = trim(($current['authors'] ?? '') . '; ' . $m[1], '; ');
             }
-            if (preg_match('/^PY\s*-\s*(\d{4})/', $line, $m)) $current['year'] = $m[1];
-            if (preg_match('/^DO\s*-\s*(.*)$/', $line, $m)) $current['doi'] = trim($m[1]);
-            if (preg_match('/^UR\s*-\s*(.*)$/', $line, $m)) $current['url'] = trim($m[1]);
+
+            if (preg_match('/^PY\s*-\s*(\d{4})/', $line, $m)) {
+                $current['year'] = $m[1];
+            }
+
+            if (preg_match('/^DO\s*-\s*(.*)$/', $line, $m)) {
+                $current['doi'] = trim($m[1]);
+            }
+
+            if (preg_match('/^UR\s*-\s*(.*)$/', $line, $m)) {
+                $current['url'] = trim($m[1]);
+            }
+
             if (preg_match('/^ER\s*-\s*/', $line)) {
                 $entries[] = $current;
                 $current = [];
             }
         }
-        if (!empty($current)) $entries[] = $current;
+
+        if (!empty($current)) {
+            $entries[] = $current;
+        }
+
         return $entries;
     }
 
     private function matchField(string $chunk, string $field): string
     {
-        if (preg_match('/' . $field . '\s*=\s*[{"]([^}"]+)[}"]/i', $chunk, $m)) return trim($m[1]);
+        if (preg_match('/' . preg_quote($field, '/') . '\s*=\s*[{"]([^}"]+)[}"]/i', $chunk, $m)) {
+            return trim($m[1]);
+        }
+
         return '';
     }
 
     private function cleanBraces(?string $s): string
     {
-        return trim(preg_replace('/[{}"]/', '', (string)$s));
+        return trim((string) preg_replace('/[{}"]/', '', (string) $s));
     }
 
-    /**
-     * Create Paper from Bib/RIS entry, then optionally fetch/attach PDF as PaperFile.
-     */
-    private function createPaperFromEntry(Request $request, array $e): Paper
+    private function createPaperFromEntry(Request $request, array $entry): Paper
     {
-        // 1) Always create the paper row first
-        $paper = Paper::create([
-            'title'      => $e['title'] ?: 'Untitled',
-            'authors'    => $e['authors'] ?? null,
-            'year'       => $e['year'] ?? null,
-            'doi'        => $e['doi'] ?? null,
-            'url'        => $e['url'] ?? null,
-            'created_by' => $request->user()->id ?? null,
-            'source'     => 'bibtex/ris',
-        ]);
+        $pdfFile = null;
+        $disk    = $this->uploadDisk();
+        $path    = null;
 
-        // 2) If pdf_url present, try to fetch and attach
-        if (!empty($e['pdf_url'])) {
+        if (!empty($entry['pdf_url'])) {
             try {
-                $resp = Http::timeout(20)->get($e['pdf_url']);
-                if ($resp->ok() && strlen($resp->body())) {
-                    $bytes  = $resp->body();
-                    $mime   = $resp->header('Content-Type', 'application/pdf');
-                    $disk   = 'uploads';
-                    $subdir = now()->format('Y/m');
-                    $orig   = basename(parse_url($e['pdf_url'], PHP_URL_PATH) ?: 'paper.pdf');
-                    $path   = "library/{$subdir}/" . Str::random(10) . "_" . $orig;
+                $pdfFile = $this->fetchRemoteFile((string) $entry['pdf_url'], [
+                    'application/pdf',
+                    'application/octet-stream',
+                    '*/*',
+                ]);
 
-                    Storage::disk($disk)->put($path, $bytes);
-
-                    $paper->files()->create([
-                        'disk'          => $disk,
-                        'path'          => $path,
-                        'original_name' => $orig,
-                        'mime'          => $mime,
-                        'size_bytes'    => strlen($bytes),
-                        'checksum'      => hash('sha256', $bytes),
-                        'uploaded_by'   => $request->user()->id ?? null,
-                    ]);
+                if ($pdfFile) {
+                    $path = $this->buildStoragePath($pdfFile['original_name']);
+                    $this->uploadBytesToStorage($path, $pdfFile['bytes']);
                 }
-            } catch (\Throwable $ex) {
-                // swallow; record still created without file
+            } catch (\Throwable $e) {
+                Log::warning('BibTeX/RIS PDF attachment fetch failed; paper will still be created', [
+                    'pdf_url' => $entry['pdf_url'],
+                    'error'   => $e->getMessage(),
+                ]);
+
+                $pdfFile = null;
+                $path = null;
             }
         }
 
-        return $paper;
+        try {
+            return DB::transaction(function () use ($request, $entry, $pdfFile, $disk, $path) {
+                $paper = Paper::create([
+                    'title'      => !empty($entry['title']) ? $entry['title'] : 'Untitled',
+                    'authors'    => $entry['authors'] ?? null,
+                    'year'       => $entry['year'] ?? null,
+                    'doi'        => $entry['doi'] ?? null,
+                    'url'        => $entry['url'] ?? null,
+                    'created_by' => $request->user()->id ?? null,
+                    'source'     => 'bibtex/ris',
+                ]);
+
+                if ($pdfFile && $path) {
+                    $paper->files()->create([
+                        'disk'          => $disk,
+                        'path'          => $path,
+                        'original_name' => $pdfFile['original_name'],
+                        'mime'          => $pdfFile['mime'],
+                        'size_bytes'    => $pdfFile['size_bytes'],
+                        'checksum'      => $pdfFile['checksum'],
+                        'uploaded_by'   => $request->user()->id ?? null,
+                    ]);
+                }
+
+                return $paper;
+            }, 3);
+        } catch (\Throwable $e) {
+            if ($path) {
+                try {
+                    Storage::disk($disk)->delete($path);
+                } catch (\Throwable $cleanupEx) {
+                    Log::warning('Cleanup failed after BibTeX/RIS transaction failure', [
+                        'disk'  => $disk,
+                        'path'  => $path,
+                        'error' => $cleanupEx->getMessage(),
+                    ]);
+                }
+            }
+
+            throw $e;
+        }
     }
 
-    /* ---------------- CSV (Option-B) ---------------- */
+    /* ---------------- CSV ---------------- */
 
     /**
-     * Original CSV importer (kept for backward compatibility if used elsewhere).
+     * Kept for backward compatibility.
      * Returns [$created, $skipped, $errors]
      */
     private function importFromCsv(Request $request, UploadedFile $csvFile): array
     {
         $reader = Reader::createFromPath($csvFile->getRealPath(), 'r');
         $reader->setHeaderOffset(0);
+
         $created = [];
         $skipped = [];
-        $errors = [];
+        $errors  = [];
 
         foreach ($reader->getRecords() as $row) {
             try {
-                $title = trim($row['title'] ?? '');
+                $title = trim((string) ($row['title'] ?? ''));
+
                 if ($title === '') {
-                    $skipped[] = ['row' => $row, 'reason' => 'Missing title'];
+                    $skipped[] = [
+                        'row'    => $row,
+                        'reason' => 'Missing title',
+                    ];
                     continue;
                 }
 
-                // 1) Create paper first
-                $paper = Paper::create([
-                    'title'      => $title,
-                    'authors'    => $row['authors'] ?? null,
-                    'year'       => $row['year'] ?? null,
-                    'doi'        => $row['doi'] ?? null,
-                    'url'        => $row['url'] ?? null,
-                    'created_by' => $request->user()->id ?? null,
-                    'source'     => 'csv',
-                ]);
+                $paper = DB::transaction(function () use ($request, $row, $title) {
+                    return Paper::create([
+                        'title'      => $title,
+                        'authors'    => $row['authors'] ?? null,
+                        'year'       => $row['year'] ?? null,
+                        'doi'        => $row['doi'] ?? null,
+                        'url'        => $row['url'] ?? null,
+                        'created_by' => $request->user()->id ?? null,
+                        'source'     => 'csv',
+                    ]);
+                }, 3);
 
-                // 2) Fetch and attach pdf_url if present
                 if (!empty($row['pdf_url'])) {
                     try {
-                        $resp = Http::timeout(20)->get($row['pdf_url']);
-                        if ($resp->ok() && strlen($resp->body())) {
-                            $bytes  = $resp->body();
-                            $mime   = $resp->header('Content-Type', 'application/pdf');
-                            $disk   = 'uploads';
-                            $subdir = now()->format('Y/m');
-                            $orig   = basename(parse_url($row['pdf_url'], PHP_URL_PATH) ?: 'paper.pdf');
-                            $path   = "library/{$subdir}/" . Str::random(10) . "_" . $orig;
+                        $pdfFile = $this->fetchRemoteFile((string) $row['pdf_url']);
+                        if ($pdfFile) {
+                            $disk = $this->uploadDisk();
+                            $path = $this->buildStoragePath($pdfFile['original_name']);
 
-                            Storage::disk($disk)->put($path, $bytes);
+                            $this->uploadBytesToStorage($path, $pdfFile['bytes']);
 
-                            $paper->files()->create([
-                                'disk'          => $disk,
-                                'path'          => $path,
-                                'original_name' => $orig,
-                                'mime'          => $mime,
-                                'size_bytes'    => strlen($bytes),
-                                'checksum'      => hash('sha256', $bytes),
-                                'uploaded_by'   => $request->user()->id ?? null,
-                            ]);
+                            try {
+                                DB::transaction(function () use ($paper, $request, $disk, $path, $pdfFile) {
+                                    $paper->files()->create([
+                                        'disk'          => $disk,
+                                        'path'          => $path,
+                                        'original_name' => $pdfFile['original_name'],
+                                        'mime'          => $pdfFile['mime'],
+                                        'size_bytes'    => $pdfFile['size_bytes'],
+                                        'checksum'      => $pdfFile['checksum'],
+                                        'uploaded_by'   => $request->user()->id ?? null,
+                                    ]);
+                                }, 3);
+                            } catch (\Throwable $e) {
+                                try {
+                                    Storage::disk($disk)->delete($path);
+                                } catch (\Throwable $cleanupEx) {
+                                    Log::warning('Cleanup failed after CSV attachment DB failure', [
+                                        'disk'  => $disk,
+                                        'path'  => $path,
+                                        'error' => $cleanupEx->getMessage(),
+                                    ]);
+                                }
+
+                                throw $e;
+                            }
                         }
                     } catch (\Throwable $e) {
-                        $errors[] = ['row' => $row, 'error' => 'pdf_url fetch failed: ' . $e->getMessage()];
+                        $errors[] = [
+                            'row'   => $row,
+                            'error' => 'pdf_url fetch failed: ' . $e->getMessage(),
+                        ];
                     }
                 }
 
                 $created[] = $paper->fresh('files');
             } catch (\Throwable $e) {
-                $errors[] = ['row' => $row, 'error' => $e->getMessage()];
+                $errors[] = [
+                    'row'   => $row,
+                    'error' => $e->getMessage(),
+                ];
             }
         }
+
         return [$created, $skipped, $errors];
     }
 
-/**
- * CSV importer that respects remaining quota.
- * Uses native PHP (fgetcsv) – no external libraries.
- * Returns [$created, $skipped, $errors]
- */
-private function importFromCsvWithQuota(Request $request, UploadedFile $csvFile, int &$remaining): array
-{
-    $created = [];
-    $skipped = [];
-    $errors  = [];
+    /**
+     * Returns [$created, $skipped, $errors]
+     */
+    private function importFromCsvWithQuota(Request $request, UploadedFile $csvFile, int &$remaining): array
+    {
+        $created = [];
+        $skipped = [];
+        $errors  = [];
 
-    if (($handle = fopen($csvFile->getRealPath(), 'r')) === false) {
-        return [[], [], [['error' => 'Unable to open CSV file']]];
-    }
-
-    // Read header row
-    $headers = fgetcsv($handle);
-    if (!$headers || !is_array($headers)) {
-        fclose($handle);
-        return [[], [], [['error' => 'Invalid or empty CSV header']]];
-    }
-
-    // Normalize headers (trim + lowercase)
-    $headers = array_map(
-        fn ($h) => strtolower(trim((string)$h)),
-        $headers
-    );
-
-    $rowNumber = 1; // header row
-
-    while (($row = fgetcsv($handle)) !== false) {
-        $rowNumber++;
-
-        if ($remaining <= 0) {
-            $skipped[] = ['row' => $rowNumber, 'reason' => 'Upload quota exceeded for your plan'];
-            continue;
+        $handle = fopen($csvFile->getRealPath(), 'r');
+        if ($handle === false) {
+            return [[], [], [['error' => 'Unable to open CSV file']]];
         }
-
-        // Skip empty lines
-        if (count(array_filter($row, fn ($v) => trim((string)$v) !== '')) === 0) {
-            continue;
-        }
-
-        // Combine header → row
-        if (count($headers) !== count($row)) {
-            $errors[] = [
-                'row'   => $rowNumber,
-                'error' => 'Column count mismatch',
-            ];
-            continue;
-        }
-
-        $rowData = array_combine($headers, $row);
 
         try {
-            // Build Paper data
-            $data = [
-                'created_by' => $request->user()->id ?? null,
-                'source'     => 'csv',
-            ];
+            $headers = fgetcsv($handle);
 
-            foreach (self::CSV_FIELD_MAP as $csvKey => $dbColumn) {
-                if (isset($rowData[$csvKey]) && trim((string)$rowData[$csvKey]) !== '') {
-                    $data[$dbColumn] = trim((string)$rowData[$csvKey]);
+            if (!$headers || !is_array($headers)) {
+                return [[], [], [['error' => 'Invalid or empty CSV header']]];
+            }
+
+            $headers = array_map(
+                fn ($h) => strtolower(trim((string) $h)),
+                $headers
+            );
+
+            $rowNumber = 1;
+
+            while (($row = fgetcsv($handle)) !== false) {
+                $rowNumber++;
+
+                if ($remaining <= 0) {
+                    $skipped[] = [
+                        'row'    => $rowNumber,
+                        'reason' => 'Upload quota exceeded for your plan',
+                    ];
+                    continue;
                 }
-            }
 
-            if (empty($data['title'])) {
-                $skipped[] = [
-                    'row'    => $rowNumber,
-                    'reason' => 'Missing title',
-                ];
-                continue;
-            }
+                if (count(array_filter($row, fn ($v) => trim((string) $v) !== '')) === 0) {
+                    continue;
+                }
 
-            // Create Paper
-            $paper = Paper::create($data);
+                if (count($headers) !== count($row)) {
+                    $errors[] = [
+                        'row'   => $rowNumber,
+                        'error' => 'Column count mismatch',
+                    ];
+                    continue;
+                }
 
-            // Optional PDF attachment
-            if (!empty($rowData['pdf_url'])) {
+                $rowData = array_combine($headers, $row);
+                if ($rowData === false) {
+                    $errors[] = [
+                        'row'   => $rowNumber,
+                        'error' => 'Unable to read CSV row',
+                    ];
+                    continue;
+                }
+
                 try {
-                    $resp = Http::timeout(20)->get(trim($rowData['pdf_url']));
-                    if ($resp->ok() && strlen($resp->body())) {
-                        $bytes  = $resp->body();
-                        $mime   = $resp->header('Content-Type', 'application/pdf');
-                        $disk   = 'uploads';
-                        $subdir = now()->format('Y/m');
-                        $orig   = basename(parse_url($rowData['pdf_url'], PHP_URL_PATH) ?: 'paper.pdf');
-                        $path   = "library/{$subdir}/" . Str::random(10) . "_" . $orig;
+                    $data = [
+                        'created_by' => $request->user()->id ?? null,
+                        'source'     => 'csv',
+                    ];
 
-                        Storage::disk($disk)->put($path, $bytes);
-
-                        $paper->files()->create([
-                            'disk'          => $disk,
-                            'path'          => $path,
-                            'original_name' => $orig,
-                            'mime'          => $mime,
-                            'size_bytes'    => strlen($bytes),
-                            'checksum'      => hash('sha256', $bytes),
-                            'uploaded_by'   => $request->user()->id ?? null,
-                        ]);
+                    foreach (self::CSV_FIELD_MAP as $csvKey => $dbColumn) {
+                        if (isset($rowData[$csvKey]) && trim((string) $rowData[$csvKey]) !== '') {
+                            $data[$dbColumn] = trim((string) $rowData[$csvKey]);
+                        }
                     }
+
+                    if (empty($data['title'])) {
+                        $skipped[] = [
+                            'row'    => $rowNumber,
+                            'reason' => 'Missing title',
+                        ];
+                        continue;
+                    }
+
+                    $pdfFile = null;
+                    $disk    = $this->uploadDisk();
+                    $path    = null;
+
+                    if (!empty($rowData['pdf_url'])) {
+                        try {
+                            $pdfFile = $this->fetchRemoteFile(trim((string) $rowData['pdf_url']));
+                            if ($pdfFile) {
+                                $path = $this->buildStoragePath($pdfFile['original_name']);
+                                $this->uploadBytesToStorage($path, $pdfFile['bytes']);
+                            }
+                        } catch (\Throwable $e) {
+                            $errors[] = [
+                                'row'   => $rowNumber,
+                                'error' => 'pdf_url fetch failed: ' . $e->getMessage(),
+                            ];
+                        }
+                    }
+
+                    try {
+                        $paper = DB::transaction(function () use ($data, $request, $pdfFile, $disk, $path) {
+                            $paper = Paper::create($data);
+
+                            if ($pdfFile && $path) {
+                                $paper->files()->create([
+                                    'disk'          => $disk,
+                                    'path'          => $path,
+                                    'original_name' => $pdfFile['original_name'],
+                                    'mime'          => $pdfFile['mime'],
+                                    'size_bytes'    => $pdfFile['size_bytes'],
+                                    'checksum'      => $pdfFile['checksum'],
+                                    'uploaded_by'   => $request->user()->id ?? null,
+                                ]);
+                            }
+
+                            return $paper;
+                        }, 3);
+                    } catch (\Throwable $e) {
+                        if ($path) {
+                            try {
+                                Storage::disk($disk)->delete($path);
+                            } catch (\Throwable $cleanupEx) {
+                                Log::warning('Cleanup failed after CSV row transaction failure', [
+                                    'disk'  => $disk,
+                                    'path'  => $path,
+                                    'error' => $cleanupEx->getMessage(),
+                                ]);
+                            }
+                        }
+
+                        throw $e;
+                    }
+
+                    $created[] = $paper->fresh('files');
+                    $remaining--;
                 } catch (\Throwable $e) {
                     $errors[] = [
                         'row'   => $rowNumber,
-                        'error' => 'pdf_url fetch failed: ' . $e->getMessage(),
+                        'error' => $e->getMessage(),
                     ];
                 }
             }
-
-            $created[] = $paper->fresh('files');
-            $remaining--;
-
-        } catch (\Throwable $e) {
-            $errors[] = [
-                'row'   => $rowNumber,
-                'error' => $e->getMessage(),
-            ];
+        } finally {
+            fclose($handle);
         }
+
+        return [$created, $skipped, $errors];
     }
-
-    fclose($handle);
-
-    return [$created, $skipped, $errors];
-}
-
 
     /* ---------------- Helpers ---------------- */
 
@@ -671,11 +965,10 @@ private function importFromCsvWithQuota(Request $request, UploadedFile $csvFile,
     {
         $base = pathinfo($name, PATHINFO_FILENAME);
         $base = preg_replace('/[_\-]+/', ' ', $base);
-        $base = trim($base);
+        $base = trim((string) $base);
+
         return Str::title($base ?: 'Untitled');
     }
-
-
 
     public function csvTemplate(): StreamedResponse
     {
@@ -717,10 +1010,17 @@ private function importFromCsvWithQuota(Request $request, UploadedFile $csvFile,
 
         return response()->streamDownload(function () use ($headers, $rows) {
             $handle = fopen('php://output', 'w');
+
+            if ($handle === false) {
+                throw new \RuntimeException('Unable to open output stream.');
+            }
+
             fputcsv($handle, $headers);
+
             foreach ($rows as $row) {
                 fputcsv($handle, $row);
             }
+
             fclose($handle);
         }, 'papers_import_sample.csv', [
             'Content-Type' => 'text/csv',

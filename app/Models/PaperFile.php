@@ -11,14 +11,66 @@ class PaperFile extends Model
     use SoftDeletes;
 
     protected $fillable = [
-        'paper_id','disk','path','original_name','mime','size_bytes','checksum','uploaded_by'
+        'paper_id',
+        'disk',
+        'path',
+        'original_name',
+        'mime',
+        'size_bytes',
+        'checksum',
+        'uploaded_by',
     ];
 
-    public function paper(): BelongsTo { return $this->belongsTo(Paper::class); }
-    public function uploader(): BelongsTo { return $this->belongsTo(User::class,'uploaded_by'); }
+    protected $appends = [
+        'preview_url',
+        'download_url',
+        'can_preview',
+    ];
+
+    public function paper(): BelongsTo
+    {
+        return $this->belongsTo(Paper::class);
+    }
+
+    public function uploader(): BelongsTo
+    {
+        return $this->belongsTo(User::class, 'uploaded_by');
+    }
+
+    public function getCanPreviewAttribute(): bool
+    {
+        $mime = strtolower((string) $this->mime);
+        $ext  = strtolower(pathinfo((string) $this->original_name, PATHINFO_EXTENSION));
+
+        return $mime === 'application/pdf' || $ext === 'pdf';
+    }
+
+    public function getPreviewUrlAttribute(): ?string
+    {
+        if (!$this->paper_id || !$this->id || !$this->can_preview) {
+            return null;
+        }
+
+        return route('papers.files.preview', [
+            'paper' => $this->paper_id,
+            'file'  => $this->id,
+        ]);
+    }
+
+    public function getDownloadUrlAttribute(): ?string
+    {
+        if (!$this->paper_id || !$this->id) {
+            return null;
+        }
+
+        return route('papers.files.download', [
+            'paper' => $this->paper_id,
+            'file'  => $this->id,
+        ]);
+    }
 
     public function getUrlAttribute(): ?string
     {
-        return $this->path ? \Storage::disk($this->disk ?: 'public')->url($this->path) : null;
+        return $this->download_url;
     }
 }
