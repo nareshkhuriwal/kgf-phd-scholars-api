@@ -162,7 +162,7 @@ Route::middleware('auth:sanctum')->group(function () {
 
     Route::get('/papers/{paperId}/citations/search', [PaperCitationController::class, 'search']);
 
-        Route::post('/papers/{paper}/files', [PaperFileController::class, 'upload'])
+    Route::post('/papers/{paper}/files', [PaperFileController::class, 'upload'])
         ->name('papers.files.upload');
 
     Route::get('/papers/{paper}/files/{file}/preview', [PaperFileController::class, 'preview'])
@@ -174,7 +174,7 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::delete('/papers/{paper}/files/{file}', [PaperFileController::class, 'destroy'])
         ->name('papers.files.destroy');
 
-        
+
 
     Route::get('/my-papers', [MyPaperController::class, 'index']);
     Route::post('/my-papers', [MyPaperController::class, 'store']);
