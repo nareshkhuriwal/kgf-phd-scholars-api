@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers\Concerns;
 
+use App\Models\PaperFile;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
 use App\Models\Paper;
@@ -14,6 +15,23 @@ trait ResolvesPublicUploads
     {
         $parts = parse_url($url);
         $path  = urldecode($parts['path'] ?? '');
+
+        // Authenticated API download URL from review / PDF viewer
+        if (preg_match('#/api/papers/(\d+)/files/(\d+)/(?:download|preview)#', $path, $m)) {
+            $paperId = (int) $m[1];
+            $fileId  = (int) $m[2];
+            $pf = PaperFile::query()
+                ->where('id', $fileId)
+                ->where('paper_id', $paperId)
+                ->first();
+            if ($pf && $pf->path) {
+                $disk = $pf->disk ?: (string) config('filesystems.default_upload_disk', 'azure');
+
+                return [$disk, $pf->path];
+            }
+
+            return [null, null];
+        }
 
         if (!Str::startsWith($path, '/uploads/')) {
             return [null, null];
@@ -103,8 +121,10 @@ protected function resolveFromPath(string $input): array
                 ->orderBy('id')
                 ->first();
 
-        if ($file && $file->disk && $file->path) {
-            return [$file->disk, $file->path];
+        if ($file && $file->path) {
+            $disk = $file->disk ?: (string) config('filesystems.default_upload_disk', 'azure');
+
+            return [$disk, $file->path];
         }
 
         if (!empty($paper->pdf_path)) {

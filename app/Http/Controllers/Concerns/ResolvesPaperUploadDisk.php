@@ -24,7 +24,14 @@ trait ResolvesPaperUploadDisk
      */
     protected function strictUploadDiskOnly(): bool
     {
-        return filter_var(env('PAPERS_STRICT_UPLOAD_DISK_ONLY', false), FILTER_VALIDATE_BOOL);
+        // Default true: paper files are read only from the configured upload disk (Azure).
+        // Set PAPERS_STRICT_UPLOAD_DISK_ONLY=false only for local legacy debugging.
+        $raw = env('PAPERS_STRICT_UPLOAD_DISK_ONLY');
+        if ($raw === null || $raw === '') {
+            return true;
+        }
+
+        return filter_var($raw, FILTER_VALIDATE_BOOL);
     }
 
     protected function storageProviderForDisk(?string $disk): string
