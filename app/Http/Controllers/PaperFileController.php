@@ -2,9 +2,9 @@
 
 namespace App\Http\Controllers;
 
-use App\Http\Controllers\Concerns\OwnerAuthorizes;
 use App\Http\Controllers\Concerns\ResolvesPaperUploadDisk;
 use App\Models\Paper;
+use App\Support\ResolvesApiScope;
 use App\Models\PaperFile;
 use Illuminate\Contracts\Filesystem\FileNotFoundException;
 use Illuminate\Http\Request;
@@ -17,7 +17,7 @@ use Symfony\Component\HttpFoundation\StreamedResponse;
 
 class PaperFileController extends Controller
 {
-    use OwnerAuthorizes, ResolvesPaperUploadDisk;
+    use ResolvesPaperUploadDisk, ResolvesApiScope;
 
     private const MAX_FILE_SIZE_KB = 51200; // 50 MB
     private const ALLOWED_MIMES = 'pdf,doc,docx';
@@ -310,7 +310,8 @@ class PaperFileController extends Controller
 
     public function upload(Request $req, Paper $paper)
     {
-        $this->authorizeOwner($paper, 'created_by');
+        $req->user() ?? abort(401, 'Unauthenticated');
+        $this->authorizeUserAccess($req, (int) $paper->created_by);
 
         $req->validate([
             'file' => ['required', 'file', 'mimes:' . self::ALLOWED_MIMES, 'max:' . self::MAX_FILE_SIZE_KB],
@@ -414,7 +415,8 @@ class PaperFileController extends Controller
             abort(404);
         }
 
-        $this->authorizeOwner($paper, 'created_by');
+        $req->user() ?? abort(401, 'Unauthenticated');
+        $this->authorizeUserAccess($req, (int) $paper->created_by);
 
         if (!$this->isPreviewableInline($file->mime, $file->original_name)) {
             abort(415, 'This file type is not supported for inline preview.');
@@ -466,7 +468,8 @@ class PaperFileController extends Controller
             abort(404);
         }
 
-        $this->authorizeOwner($paper, 'created_by');
+        $req->user() ?? abort(401, 'Unauthenticated');
+        $this->authorizeUserAccess($req, (int) $paper->created_by);
 
         try {
             [, $stream, $resolvedSize] = $this->openStreamForFile($file);
@@ -505,13 +508,14 @@ class PaperFileController extends Controller
         }, $name, $headers);
     }
 
-    public function destroy(Paper $paper, PaperFile $file)
+    public function destroy(Request $req, Paper $paper, PaperFile $file)
     {
         if ($file->paper_id !== $paper->id) {
             abort(404);
         }
 
-        $this->authorizeOwner($paper, 'created_by');
+        $req->user() ?? abort(401, 'Unauthenticated');
+        $this->authorizeUserAccess($req, (int) $paper->created_by);
 
         $disk = $file->disk ?: $this->uploadDisk();
         $path = $file->path;

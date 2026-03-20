@@ -7,14 +7,14 @@ use App\Models\Paper;
 use App\Models\PaperFile;
 use Illuminate\Support\Facades\Storage;
 use setasign\Fpdi\Tcpdf\Fpdi;
-use App\Http\Controllers\Concerns\OwnerAuthorizes;
 use App\Http\Controllers\Concerns\ResolvesPublicUploads;
+use App\Support\ResolvesApiScope;
 use App\Services\AuditLogger;
 
 class PdfHighlightController extends Controller
 {
-    use OwnerAuthorizes;
     use ResolvesPublicUploads;
+    use ResolvesApiScope;
 
     /* ---------------------------------------------------------
      * HELPERS (existing)
@@ -325,7 +325,8 @@ class PdfHighlightController extends Controller
 
     public function apply(ApplyHighlightsRequest $request, Paper $paper)
     {
-        $this->authorizeOwner($paper, 'created_by');
+        $request->user() ?? abort(401, 'Unauthenticated');
+        $this->authorizeUserAccess($request, (int) $paper->created_by);
 
         // Prepare audit payload early (raw user intent)
         $auditPayload = [
