@@ -5,8 +5,6 @@ namespace App\Models;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\Relations\HasOne;
-use Illuminate\Support\Facades\Storage;
-
 class Paper extends Model
 {
 
@@ -73,24 +71,30 @@ class Paper extends Model
 
     public function getPdfUrlAttribute(): ?string
     {
-        // Prefer an explicit pdf_path if you still use it anywhere
+        // Legacy column: still expose a public URL if present
         if (!empty($this->pdf_path)) {
             return asset('storage/' . $this->pdf_path);
         }
 
-        // Pick the first PDF if present, otherwise the first file
+        // Primary PDF file — use authenticated API download route (Azure / remote-safe).
+        // Do not use Storage::disk(...)->url() here: that produced /uploads/... for local disks
+        // and breaks Review / PDF.js when files live only on Data Lake.
         $file = $this->relationLoaded('files')
             ? ($this->files->firstWhere('mime', 'application/pdf') ?? $this->files->first())
             : ($this->files()->orderByRaw("CASE WHEN mime='application/pdf' THEN 0 ELSE 1 END")
                 ->orderBy('id')
                 ->first());
 
-        if (!$file) return null;
+        if (!$file || !$this->id) {
+            return null;
+        }
 
         try {
-            return Storage::disk($file->disk)->url($file->path);
+            return route('papers.files.download', [
+                'paper' => $this->id,
+                'file'  => $file->id,
+            ], true);
         } catch (\Throwable $e) {
-            // If disk url fails (bad disk or no symlink), return null gracefully
             return null;
         }
     }

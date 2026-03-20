@@ -4,6 +4,7 @@ namespace App\Http\Controllers;
 
 use App\Http\Requests\ApplyHighlightsRequest;
 use App\Models\Paper;
+use App\Models\PaperFile;
 use Illuminate\Support\Facades\Storage;
 use setasign\Fpdi\Tcpdf\Fpdi;
 use App\Http\Controllers\Concerns\OwnerAuthorizes;
@@ -293,6 +294,30 @@ class PdfHighlightController extends Controller
         ];
     }
 
+    /**
+     * FPDI requires a local filesystem path. Azure / S3 blobs are copied to a temp .pdf file.
+     */
+    private function materializePdfForProcessing(string $disk, string $path): string
+    {
+        $bytes = Storage::disk($disk)->get($path);
+        if (!is_string($bytes) || $bytes === '') {
+            throw new \RuntimeException('Could not read PDF from storage');
+        }
+
+        $base = tempnam(sys_get_temp_dir(), 'pdfhl_');
+        if ($base === false) {
+            throw new \RuntimeException('Could not allocate temp file');
+        }
+
+        @unlink($base);
+        $tmpPdf = $base . '.pdf';
+        if (file_put_contents($tmpPdf, $bytes) === false) {
+            throw new \RuntimeException('Could not write temp PDF');
+        }
+
+        return $tmpPdf;
+    }
+
 
     /* ---------------------------------------------------------
      * APPLY HIGHLIGHTS (main)
@@ -325,7 +350,6 @@ class PdfHighlightController extends Controller
                 throw new \RuntimeException('PDF not found');
             }
 
-            $absIn   = Storage::disk($srcDisk)->path($srcPath);
             $replace = $request->boolean('replace', false);
 
             // -----------------------------------------------------
@@ -387,7 +411,7 @@ class PdfHighlightController extends Controller
             $cleanByPage = $this->mergeOverlappingRectsByPage($cleanByPage); // overlap merge ✅
 
             // -----------------------------------------------------
-            // OUTPUT PATH (unchanged)
+            // OUTPUT PATH (blob key for non-replace)
             // -----------------------------------------------------
             $dir   = trim(dirname($srcPath), '/');
             $base  = pathinfo($srcPath, PATHINFO_FILENAME);
@@ -395,56 +419,100 @@ class PdfHighlightController extends Controller
                 . "/{$base}_hl_" . now()->format('Ymd_His') . ".pdf";
 
             if (!$replace) {
-                Storage::disk($srcDisk)->makeDirectory(dirname($outRel));
+                try {
+                    Storage::disk($srcDisk)->makeDirectory(dirname($outRel));
+                } catch (\Throwable $e) {
+                    // Azure / flat namespaces may not need explicit directories
+                }
             }
 
-            $absOut = Storage::disk($srcDisk)->path($outRel);
+            $absIn = $this->materializePdfForProcessing($srcDisk, $srcPath);
+            $absOut = null;
 
-            // -----------------------------------------------------
-            // RENDER PDF (minimal changes: use normalized style)
-            // -----------------------------------------------------
-            $pdf = new Fpdi();
-            $pageCount = $pdf->setSourceFile($absIn);
+            try {
+                $baseOut = tempnam(sys_get_temp_dir(), 'pdfhlout_');
+                if ($baseOut === false) {
+                    throw new \RuntimeException('Could not allocate output temp file');
+                }
+                @unlink($baseOut);
+                $absOut = $baseOut . '.pdf';
 
-            foreach (range(1, $pageCount) as $pageNo) {
-                $tplIdx = $pdf->importPage($pageNo);
-                $size   = $pdf->getTemplateSize($tplIdx);
+                // -----------------------------------------------------
+                // RENDER PDF (minimal changes: use normalized style)
+                // -----------------------------------------------------
+                $pdf = new Fpdi();
+                $pageCount = $pdf->setSourceFile($absIn);
 
-                $pdf->AddPage($size['orientation'], [$size['width'], $size['height']]);
-                $pdf->useTemplate($tplIdx);
+                foreach (range(1, $pageCount) as $pageNo) {
+                    $tplIdx = $pdf->importPage($pageNo);
+                    $size   = $pdf->getTemplateSize($tplIdx);
 
-                foreach ($cleanByPage[$pageNo] ?? [] as $rect) {
-                    $style = $this->normalizeStyle($rect['style'] ?? null);
-                    $color = $style['color'];
-                    $alpha = $style['alpha'];
+                    $pdf->AddPage($size['orientation'], [$size['width'], $size['height']]);
+                    $pdf->useTemplate($tplIdx);
 
-                    [$r, $g, $b] = $this->hexToRgb($color);
+                    foreach ($cleanByPage[$pageNo] ?? [] as $rect) {
+                        $style = $this->normalizeStyle($rect['style'] ?? null);
+                        $color = $style['color'];
+                        $alpha = $style['alpha'];
 
-                    $pdf->SetFillColor($r, $g, $b);
-                    $pdf->SetAlpha($alpha);
+                        [$r, $g, $b] = $this->hexToRgb($color);
 
-                    $pdf->Rect(
-                        $rect['x'] * $size['width'],
-                        $rect['y'] * $size['height'],
-                        $rect['w'] * $size['width'],
-                        $rect['h'] * $size['height'],
-                        'F'
-                    );
+                        $pdf->SetFillColor($r, $g, $b);
+                        $pdf->SetAlpha($alpha);
+
+                        $pdf->Rect(
+                            $rect['x'] * $size['width'],
+                            $rect['y'] * $size['height'],
+                            $rect['w'] * $size['width'],
+                            $rect['h'] * $size['height'],
+                            'F'
+                        );
+                    }
+
+                    $pdf->SetAlpha(1);
                 }
 
-                $pdf->SetAlpha(1);
+                $pdf->SetTitle('Highlighted');
+                $pdf->Output($absOut, 'F');
+
+                $binaryOut = file_get_contents($absOut);
+                if ($binaryOut === false || $binaryOut === '') {
+                    throw new \RuntimeException('Highlighted PDF output was empty');
+                }
+
+                if ($replace) {
+                    Storage::disk($srcDisk)->put($srcPath, $binaryOut);
+                    $outRel = $srcPath;
+
+                    $fileRow = PaperFile::query()
+                        ->where('paper_id', $paper->id)
+                        ->where('path', $srcPath)
+                        ->first();
+
+                    if ($fileRow) {
+                        $url = route('papers.files.download', ['paper' => $paper->id, 'file' => $fileRow->id], true);
+                    } else {
+                        try {
+                            $url = Storage::disk($srcDisk)->url($srcPath);
+                        } catch (\Throwable $e) {
+                            $url = '';
+                        }
+                    }
+                } else {
+                    Storage::disk($srcDisk)->put($outRel, $binaryOut);
+
+                    try {
+                        $url = Storage::disk($srcDisk)->url($outRel);
+                    } catch (\Throwable $e) {
+                        $url = $outRel;
+                    }
+                }
+            } finally {
+                @unlink($absIn);
+                if ($absOut && is_file($absOut)) {
+                    @unlink($absOut);
+                }
             }
-
-            $pdf->SetTitle('Highlighted');
-            $pdf->Output($absOut, 'F');
-
-            if ($replace) {
-                Storage::disk($srcDisk)->delete($srcPath);
-                Storage::disk($srcDisk)->move($outRel, $srcPath);
-                $outRel = $srcPath;
-            }
-
-            $url = Storage::disk($srcDisk)->url($outRel);
 
             // -----------------------------------------------------
             // AUDIT LOG — SUCCESS
