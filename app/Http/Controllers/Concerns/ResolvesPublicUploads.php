@@ -10,27 +10,80 @@ use App\Models\Paper;
 
 trait ResolvesPublicUploads
 {
+    /**
+     * Resolve paper_files row from an authenticated download/preview URL.
+     * Accepts /api/papers/... and /papers/... (reverse-proxy stripped /api).
+     */
+    protected function paperFileFromDownloadUrl(string $url): ?PaperFile
+    {
+        $parts = parse_url($url);
+        $path = urldecode($parts['path'] ?? '');
+        if ($path === '') {
+            return null;
+        }
+
+        if (! preg_match('#/(?:api/)?papers/(\d+)/files/(\d+)/(?:download|preview)\b#', $path, $m)) {
+            return null;
+        }
+
+        $paperId = (int) $m[1];
+        $fileId = (int) $m[2];
+
+        return PaperFile::query()
+            ->where('id', $fileId)
+            ->where('paper_id', $paperId)
+            ->first();
+    }
+
+    /**
+     * Highlight save may only touch per-review blobs (is_review_copy or path under reviews/{paper_id}/r{n}/).
+     */
+    protected function paperFileQualifiesAsReviewWorkingCopy(?PaperFile $row, Paper $paper): bool
+    {
+        if (! $row || (int) $row->paper_id !== (int) $paper->id) {
+            return false;
+        }
+
+        $attrs = $row->getAttributes();
+        $rawFlag = $attrs['is_review_copy'] ?? null;
+        if ($rawFlag === true || $rawFlag === 1 || $rawFlag === '1') {
+            return true;
+        }
+
+        $prefix = rtrim((string) config('filesystems.review_working_copy_prefix', 'reviews'), '/');
+        $path = (string) ($attrs['path'] ?? '');
+        if ($path === '') {
+            return false;
+        }
+
+        $quotedPrefix = preg_quote($prefix, '#');
+        $pid = (int) $paper->id;
+        if (preg_match("#^{$quotedPrefix}/{$pid}/r\\d+/#", $path)) {
+            if ($rawFlag === null || $rawFlag === false || $rawFlag === 0 || $rawFlag === '0' || $rawFlag === '') {
+                try {
+                    $row->forceFill(['is_review_copy' => true])->save();
+                } catch (\Throwable) {
+                    // still allow this request if the column cannot be updated
+                }
+            }
+
+            return true;
+        }
+
+        return false;
+    }
+
     /** URL → (disk, relPath). Supports /uploads/... (both disks). */
     protected function resolveFromUrl(string $url): array
     {
         $parts = parse_url($url);
         $path  = urldecode($parts['path'] ?? '');
 
-        // Authenticated API download URL from review / PDF viewer
-        if (preg_match('#/api/papers/(\d+)/files/(\d+)/(?:download|preview)#', $path, $m)) {
-            $paperId = (int) $m[1];
-            $fileId  = (int) $m[2];
-            $pf = PaperFile::query()
-                ->where('id', $fileId)
-                ->where('paper_id', $paperId)
-                ->first();
-            if ($pf && $pf->path) {
-                $disk = $pf->disk ?: (string) config('filesystems.default_upload_disk', 'azure');
+        $pf = $this->paperFileFromDownloadUrl($url);
+        if ($pf && $pf->path) {
+            $disk = $pf->disk ?: (string) config('filesystems.default_upload_disk', 'azure');
 
-                return [$disk, $pf->path];
-            }
-
-            return [null, null];
+            return [$disk, $pf->path];
         }
 
         if (!Str::startsWith($path, '/uploads/')) {

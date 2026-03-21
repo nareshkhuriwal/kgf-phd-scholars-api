@@ -11,7 +11,9 @@ class FlatReviewResource extends JsonResource
     {
         $paper = $this->paper;
         $libraryPdfUrl = $paper?->pdf_url;
-        $reviewPdfUrl = $this->resolveReviewPdfUrl($libraryPdfUrl);
+        // Reviews UI must load only the per-review working copy, never fall back to the shared library file.
+        $reviewOnlyPdfUrl = $this->reviewWorkingCopyDownloadUrl();
+        $highlightSaveAllowed = $this->computeHighlightSaveAllowed($reviewOnlyPdfUrl, $libraryPdfUrl);
 
         return [
             /* ---------------- Review ---------------- */
@@ -20,6 +22,8 @@ class FlatReviewResource extends JsonResource
             'user_id'         => $this->user_id,
             /** Present when a per-review PDF copy exists (only this file may be overwritten by highlight save). */
             'review_working_copy_file_id' => $this->review_working_copy_file_id,
+            /** Explicit flag for the portal (avoids client-side guesswork when ids/URLs differ slightly). */
+            'highlight_save_allowed' => $highlightSaveAllowed,
             'status'          => $this->status,
             'review_sections' => $this->review_sections ?? [],
              // ✅ ADD THESE TWO LINES
@@ -47,8 +51,8 @@ class FlatReviewResource extends JsonResource
             'area'      => $paper?->area,
 
             /* ---------------- Files ---------------- */
-            // Review UI: annotated PDF is the per-review working copy; library PDF stays unchanged.
-            'pdf_url' => $reviewPdfUrl,
+            // Review UI: annotated PDF is the per-review working copy only (see library_pdf_url for original).
+            'pdf_url' => $reviewOnlyPdfUrl,
             'library_pdf_url' => $libraryPdfUrl,
 
             'files' => $paper?->relationLoaded('files')
@@ -71,7 +75,7 @@ class FlatReviewResource extends JsonResource
         ];
     }
 
-    private function resolveReviewPdfUrl(?string $libraryPdfUrl): ?string
+    private function reviewWorkingCopyDownloadUrl(): ?string
     {
         /** @var PaperFile|null $wc */
         $wc = $this->resource->workingCopyFile;
@@ -83,10 +87,23 @@ class FlatReviewResource extends JsonResource
                     'file'  => $wc->id,
                 ], true);
             } catch (\Throwable $e) {
-                return $libraryPdfUrl;
+                return null;
             }
         }
 
-        return $libraryPdfUrl;
+        return null;
+    }
+
+    private function computeHighlightSaveAllowed(?string $reviewPdfUrl, ?string $libraryPdfUrl): bool
+    {
+        if ($reviewPdfUrl === null || $reviewPdfUrl === '') {
+            return false;
+        }
+
+        if ($libraryPdfUrl !== null && $libraryPdfUrl !== '' && $reviewPdfUrl === $libraryPdfUrl) {
+            return false;
+        }
+
+        return true;
     }
 }

@@ -357,14 +357,19 @@ class PdfHighlightController extends Controller
             // Non-replace mode (creating highlighted/... files) is disabled.
             $replace = true;
 
-            // Never burn highlights into the library (canonical) file — only into per-review copies.
-            $targetRow = PaperFile::query()
-                ->where('paper_id', $paper->id)
-                ->where('path', $srcPath)
-                ->first();
+            // Prefer the file id embedded in download URLs (reliable); path-only lookup can miss due to DB flags or encoding.
+            $targetRow = $sourceUrl !== ''
+                ? $this->paperFileFromDownloadUrl($sourceUrl)
+                : null;
+            if (! $targetRow) {
+                $targetRow = PaperFile::query()
+                    ->where('paper_id', $paper->id)
+                    ->where('path', $srcPath)
+                    ->first();
+            }
 
             if ($replace) {
-                if (!$targetRow || !($targetRow->is_review_copy ?? false)) {
+                if (! $this->paperFileQualifiesAsReviewWorkingCopy($targetRow, $paper)) {
                     throw new HttpResponseException(
                         response()->json([
                             'message' => 'In-place highlight save is only allowed on your review working copy, not the library PDF. Open this paper from Reviews and wait for the review copy to load, then save again.',
@@ -497,11 +502,20 @@ class PdfHighlightController extends Controller
                     ->where('path', $srcPath)
                     ->first();
 
+                // Fallback: path string mismatch (encoding) — use row we already resolved for auth.
+                if (! $fileRow && $targetRow instanceof PaperFile) {
+                    $norm = static fn (string $p): string => str_replace('\\', '/', trim($p, '/'));
+                    if ($norm($targetRow->path) === $norm($srcPath)) {
+                        $fileRow = $targetRow;
+                    }
+                }
+
+                $url = '';
                 if ($fileRow) {
                     $url = route('papers.files.download', ['paper' => $paper->id, 'file' => $fileRow->id], true);
                 } else {
                     try {
-                        $url = Storage::disk($srcDisk)->url($srcPath);
+                        $url = (string) Storage::disk($srcDisk)->url($srcPath);
                     } catch (\Throwable $e) {
                         $url = '';
                     }
