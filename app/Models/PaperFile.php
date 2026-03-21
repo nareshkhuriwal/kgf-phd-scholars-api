@@ -19,6 +19,11 @@ class PaperFile extends Model
         'size_bytes',
         'checksum',
         'uploaded_by',
+        'is_review_copy',
+    ];
+
+    protected $casts = [
+        'is_review_copy' => 'boolean',
     ];
 
     protected $appends = [

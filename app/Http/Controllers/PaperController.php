@@ -599,7 +599,7 @@ class PaperController extends Controller
 
     private function paperSubdir(): string
     {
-        return 'library/' . now()->format('Y/m');
+        return $this->libraryBlobSubdir();
     }
 
     private function buildStoragePath(string $originalName): string

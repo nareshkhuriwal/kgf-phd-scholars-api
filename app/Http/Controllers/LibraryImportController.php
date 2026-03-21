@@ -21,7 +21,7 @@ class LibraryImportController extends Controller
 
     private const MAX_UPLOAD_SIZE_KB = 51200; // 50 MB
     private const MAX_CSV_SIZE_KB    = 20480; // 20 MB
-    private const REMOTE_TIMEOUT_SEC = 60;
+    private const REMOTE_TIMEOUT_SEC = 20;
     private const REMOTE_MAX_BYTES   = 52428800; // 50 MB
 
     private const CSV_FIELD_MAP = [
@@ -296,7 +296,7 @@ class LibraryImportController extends Controller
 
     private function librarySubdir(): string
     {
-        return 'library/' . now()->format('Y/m');
+        return $this->libraryBlobSubdir();
     }
 
     private function buildStoragePath(string $originalName): string
@@ -369,7 +369,8 @@ class LibraryImportController extends Controller
             return null;
         }
 
-        $response = Http::timeout(self::REMOTE_TIMEOUT_SEC)
+        $response = Http::connectTimeout(8)
+            ->timeout(self::REMOTE_TIMEOUT_SEC)
             ->withHeaders([
                 'User-Agent' => 'KGF-LibraryBot/1.0',
                 'Accept'     => implode(',', $accept),

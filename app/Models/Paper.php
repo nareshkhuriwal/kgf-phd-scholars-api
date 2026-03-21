@@ -80,10 +80,14 @@ class Paper extends Model
         // Do not use Storage::disk(...)->url() here: that produced /uploads/... for local disks
         // and breaks Review / PDF.js when files live only on Data Lake.
         $file = $this->relationLoaded('files')
-            ? ($this->files->firstWhere('mime', 'application/pdf') ?? $this->files->first())
-            : ($this->files()->orderByRaw("CASE WHEN mime='application/pdf' THEN 0 ELSE 1 END")
+            ? $this->resolveLibraryPdfFromCollection($this->files)
+            : $this->files()
+                ->where(function ($q) {
+                    $q->where('is_review_copy', false)->orWhereNull('is_review_copy');
+                })
+                ->orderByRaw("CASE WHEN mime='application/pdf' THEN 0 ELSE 1 END")
                 ->orderBy('id')
-                ->first());
+                ->first();
 
         if (!$file || !$this->id) {
             return null;
@@ -102,5 +106,15 @@ class Paper extends Model
     public function comments()
     {
         return $this->hasMany(PaperComment::class);
+    }
+
+    /**
+     * @param \Illuminate\Support\Collection<int, PaperFile> $files
+     */
+    private function resolveLibraryPdfFromCollection($files): ?PaperFile
+    {
+        $library = $files->filter(fn (PaperFile $f) => !($f->is_review_copy ?? false));
+
+        return $library->firstWhere('mime', 'application/pdf') ?? $library->first();
     }
 }

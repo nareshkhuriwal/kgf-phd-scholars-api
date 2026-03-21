@@ -15,6 +15,7 @@ class Review extends Model
     
     protected $fillable = [
         'paper_id','user_id',
+        'review_working_copy_file_id',
         'html','status','key_issue','remarks',
         'review_sections',   // NEW
     ];
@@ -43,4 +44,9 @@ class Review extends Model
 
     public function paper(): BelongsTo { return $this->belongsTo(Paper::class); }
     public function user(): BelongsTo { return $this->belongsTo(User::class); }
+
+    public function workingCopyFile(): BelongsTo
+    {
+        return $this->belongsTo(PaperFile::class, 'review_working_copy_file_id');
+    }
 }

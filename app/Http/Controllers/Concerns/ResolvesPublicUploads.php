@@ -116,8 +116,12 @@ protected function resolveFromPath(string $input): array
     protected function resolvePdfDiskAndPath(Paper $paper): array
     {
         $file = $paper->relationLoaded('files')
-            ? ($paper->files->firstWhere('mime', 'application/pdf') ?? $paper->files->first())
-            : $paper->files()->orderByRaw("CASE WHEN mime='application/pdf' THEN 0 ELSE 1 END")
+            ? $this->firstLibraryPdfFromCollection($paper->files)
+            : $paper->files()
+                ->where(function ($q) {
+                    $q->where('is_review_copy', false)->orWhereNull('is_review_copy');
+                })
+                ->orderByRaw("CASE WHEN mime='application/pdf' THEN 0 ELSE 1 END")
                 ->orderBy('id')
                 ->first();
 
@@ -138,6 +142,13 @@ protected function resolveFromPath(string $input): array
         return [null, null];
     }
 
+    /**
+     * @param \Illuminate\Support\Collection<int, \App\Models\PaperFile> $files
+     */
+    private function firstLibraryPdfFromCollection($files): ?PaperFile
+    {
+        $library = $files->filter(fn (PaperFile $f) => !($f->is_review_copy ?? false));
 
-
+        return $library->firstWhere('mime', 'application/pdf') ?? $library->first();
+    }
 }

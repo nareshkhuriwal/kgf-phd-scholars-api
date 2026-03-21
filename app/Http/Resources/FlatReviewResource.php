@@ -2,6 +2,7 @@
 
 namespace App\Http\Resources;
 
+use App\Models\PaperFile;
 use Illuminate\Http\Resources\Json\JsonResource;
 
 class FlatReviewResource extends JsonResource
@@ -9,12 +10,16 @@ class FlatReviewResource extends JsonResource
     public function toArray($request): array
     {
         $paper = $this->paper;
+        $libraryPdfUrl = $paper?->pdf_url;
+        $reviewPdfUrl = $this->resolveReviewPdfUrl($libraryPdfUrl);
 
         return [
             /* ---------------- Review ---------------- */
             'review_id'       => $this->id,
             'paper_id'        => $this->paper_id,
             'user_id'         => $this->user_id,
+            /** Present when a per-review PDF copy exists (only this file may be overwritten by highlight save). */
+            'review_working_copy_file_id' => $this->review_working_copy_file_id,
             'status'          => $this->status,
             'review_sections' => $this->review_sections ?? [],
              // ✅ ADD THESE TWO LINES
@@ -42,10 +47,15 @@ class FlatReviewResource extends JsonResource
             'area'      => $paper?->area,
 
             /* ---------------- Files ---------------- */
-            'pdf_url' => $paper?->pdf_url,
+            // Review UI: annotated PDF is the per-review working copy; library PDF stays unchanged.
+            'pdf_url' => $reviewPdfUrl,
+            'library_pdf_url' => $libraryPdfUrl,
 
             'files' => $paper?->relationLoaded('files')
-                ? $paper->files->map(fn ($f) => [
+                ? $paper->files
+                    ->filter(fn ($f) => !($f->is_review_copy ?? false))
+                    ->values()
+                    ->map(fn ($f) => [
                     'id'            => $f->id,
                     'url'           => $f->url,
                     'original_name' => $f->original_name,
@@ -59,5 +69,24 @@ class FlatReviewResource extends JsonResource
                 ? PaperCommentResource::collection($paper->comments)
                 : [],
         ];
+    }
+
+    private function resolveReviewPdfUrl(?string $libraryPdfUrl): ?string
+    {
+        /** @var PaperFile|null $wc */
+        $wc = $this->resource->workingCopyFile;
+
+        if ($wc && $wc->paper_id && $wc->id) {
+            try {
+                return route('papers.files.download', [
+                    'paper' => $wc->paper_id,
+                    'file'  => $wc->id,
+                ], true);
+            } catch (\Throwable $e) {
+                return $libraryPdfUrl;
+            }
+        }
+
+        return $libraryPdfUrl;
     }
 }

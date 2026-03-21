@@ -16,6 +16,8 @@ use App\Http\Resources\FlatReviewResource;
 use App\Support\ResolvesApiScope;
 use App\Models\ReviewTag;
 use App\Models\Tag;
+use App\Models\User;
+use App\Services\ReviewWorkingCopyService;
 use Illuminate\Support\Facades\DB;
 
 
@@ -71,9 +73,7 @@ class ReviewController extends Controller
             ]);
         }
 
-        // Load paper with files and comments
-        $review->load(['paper.files', 'paper.comments.user', 'paper.comments.children.user']);
-
+        $this->attachReviewRelationsAndWorkingCopy($review, $paper, $request->user());
 
         $review->problem_tags = ReviewTag::where('review_id', $review->id)
             ->where('tag_type', 'problem')
@@ -172,7 +172,7 @@ class ReviewController extends Controller
         }
 
         $review->save();
-        $review->load(['paper.files', 'paper.comments.user', 'paper.comments.children.user']);
+        $this->attachReviewRelationsAndWorkingCopy($review, $paper, $request->user());
 
         Log::info('Review updated successfully', [
             'review_id' => $review->id
@@ -289,7 +289,7 @@ class ReviewController extends Controller
         }
 
         $review->save();
-        $review->load(['paper.files', 'paper.comments.user', 'paper.comments.children.user']);
+        $this->attachReviewRelationsAndWorkingCopy($review, $paper, $request->user());
 
         Log::info('Section update completed', [
             'review_id' => $review->id
@@ -333,7 +333,7 @@ class ReviewController extends Controller
             'new_status' => $review->status
         ]);
 
-        $review->load(['paper.files', 'paper.comments.user', 'paper.comments.children.user']);
+        $this->attachReviewRelationsAndWorkingCopy($review, $paper, $request->user());
 
         return new FlatReviewResource($review);
     }
@@ -367,8 +367,18 @@ class ReviewController extends Controller
             'section_count' => count($review->review_sections ?? [])
         ]);
 
-        $review->load(['paper.files', 'paper.comments.user', 'paper.comments.children.user']);
+        $this->attachReviewRelationsAndWorkingCopy($review, $paper, $request->user());
 
         return new FlatReviewResource($review);
+    }
+
+    private function attachReviewRelationsAndWorkingCopy(Review $review, Paper $paper, User $user): void
+    {
+        $review->load(['paper.files', 'paper.comments.user', 'paper.comments.children.user']);
+
+        app(ReviewWorkingCopyService::class)->ensure($review, $paper, $user);
+
+        $review->refresh();
+        $review->load(['workingCopyFile', 'paper.files', 'paper.comments.user', 'paper.comments.children.user']);
     }
 }
