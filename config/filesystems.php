@@ -57,6 +57,19 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | Azure blob HTTP client (Guzzle) — used by azure-storage-blob driver
+    |--------------------------------------------------------------------------
+    |
+    | Per-disk "timeout" / "connect_timeout" override these when set on the disk.
+    |
+    */
+    'azure_http' => [
+        'timeout' => (int) env('AZURE_HTTP_TIMEOUT', 120),
+        'connect_timeout' => (int) env('AZURE_HTTP_CONNECT_TIMEOUT', 15),
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
     | Filesystem Disks
     |--------------------------------------------------------------------------
     |
@@ -79,12 +92,16 @@ return [
             'connection_string' => env('AZURE_STORAGE_CONNECTION_STRING'),
             // Container name (e.g. "scholars"). Inside it: library/... originals, review/... working copies.
             'container' => env('AZURE_STORAGE_CONTAINER', 'scholars'),
+            'timeout' => env('AZURE_HTTP_TIMEOUT'),
+            'connect_timeout' => env('AZURE_HTTP_CONNECT_TIMEOUT'),
         ],
 
         'azure_legacy' => [
             'driver' => 'azure-storage-blob',
             'connection_string' => env('AZURE_STORAGE_CONNECTION_STRING'),
             'container' => env('AZURE_STORAGE_LEGACY_CONTAINER') ?: env('AZURE_STORAGE_CONTAINER', 'scholars'),
+            'timeout' => env('AZURE_HTTP_TIMEOUT'),
+            'connect_timeout' => env('AZURE_HTTP_CONNECT_TIMEOUT'),
         ],
 
         // Standard Laravel public disk (needs storage:link → often blocked on cPanel)

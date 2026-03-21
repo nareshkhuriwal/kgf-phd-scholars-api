@@ -133,6 +133,16 @@ return [
     |
     */
 
+    /*
+    |--------------------------------------------------------------------------
+    | API max execution time (seconds)
+    |--------------------------------------------------------------------------
+    |
+    | Azure blob + PDF endpoints may exceed PHP's default 30s. Set to 0 to use php.ini only.
+    |
+    */
+    'api_max_execution_seconds' => (int) env('APP_API_MAX_EXECUTION_SECONDS', 120),
+
     'trial' => [
         // Default trial duration in days for admin accounts
         'duration_days' => env('TRIAL_DURATION_DAYS', 30),
