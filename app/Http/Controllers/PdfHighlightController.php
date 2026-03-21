@@ -5,6 +5,7 @@ namespace App\Http\Controllers;
 use App\Http\Requests\ApplyHighlightsRequest;
 use App\Models\Paper;
 use App\Models\PaperFile;
+use Illuminate\Http\Exceptions\HttpResponseException;
 use Illuminate\Support\Facades\Storage;
 use setasign\Fpdi\Tcpdf\Fpdi;
 use App\Http\Controllers\Concerns\ResolvesPublicUploads;
@@ -331,7 +332,8 @@ class PdfHighlightController extends Controller
         // Prepare audit payload early (raw user intent)
         $auditPayload = [
             'source_url'       => $request->input('sourceUrl') ?? $request->input('source_url'),
-            'replace'          => $request->boolean('replace', false),
+            'replace_requested' => $request->boolean('replace', false),
+            'replace'          => true,
             'highlights'       => $request->input('highlights', []),
             'brush_highlights' => $request->input('brushHighlights', []),
         ];
@@ -351,7 +353,25 @@ class PdfHighlightController extends Controller
                 throw new \RuntimeException('PDF not found');
             }
 
-            $replace = $request->boolean('replace', false);
+            // Hard-lock behavior: highlights always overwrite review working copy.
+            // Non-replace mode (creating highlighted/... files) is disabled.
+            $replace = true;
+
+            // Never burn highlights into the library (canonical) file — only into per-review copies.
+            $targetRow = PaperFile::query()
+                ->where('paper_id', $paper->id)
+                ->where('path', $srcPath)
+                ->first();
+
+            if ($replace) {
+                if (!$targetRow || !($targetRow->is_review_copy ?? false)) {
+                    throw new HttpResponseException(
+                        response()->json([
+                            'message' => 'In-place highlight save is only allowed on your review working copy, not the library PDF. Open this paper from Reviews and wait for the review copy to load, then save again.',
+                        ], 422)
+                    );
+                }
+            }
 
             // -----------------------------------------------------
             // NORMALIZE HIGHLIGHTS (same behavior as before)
@@ -412,20 +432,9 @@ class PdfHighlightController extends Controller
             $cleanByPage = $this->mergeOverlappingRectsByPage($cleanByPage); // overlap merge ✅
 
             // -----------------------------------------------------
-            // OUTPUT PATH (blob key for non-replace)
+            // OUTPUT PATH
             // -----------------------------------------------------
-            $dir   = trim(dirname($srcPath), '/');
-            $base  = pathinfo($srcPath, PATHINFO_FILENAME);
-            $outRel = ($replace ? $dir : ($dir . '/highlighted'))
-                . "/{$base}_hl_" . now()->format('Ymd_His') . ".pdf";
-
-            if (!$replace) {
-                try {
-                    Storage::disk($srcDisk)->makeDirectory(dirname($outRel));
-                } catch (\Throwable $e) {
-                    // Azure / flat namespaces may not need explicit directories
-                }
-            }
+            $outRel = $srcPath;
 
             $absIn = $this->materializePdfForProcessing($srcDisk, $srcPath);
             $absOut = null;
@@ -481,31 +490,20 @@ class PdfHighlightController extends Controller
                     throw new \RuntimeException('Highlighted PDF output was empty');
                 }
 
-                if ($replace) {
-                    Storage::disk($srcDisk)->put($srcPath, $binaryOut);
-                    $outRel = $srcPath;
+                Storage::disk($srcDisk)->put($srcPath, $binaryOut);
 
-                    $fileRow = PaperFile::query()
-                        ->where('paper_id', $paper->id)
-                        ->where('path', $srcPath)
-                        ->first();
+                $fileRow = PaperFile::query()
+                    ->where('paper_id', $paper->id)
+                    ->where('path', $srcPath)
+                    ->first();
 
-                    if ($fileRow) {
-                        $url = route('papers.files.download', ['paper' => $paper->id, 'file' => $fileRow->id], true);
-                    } else {
-                        try {
-                            $url = Storage::disk($srcDisk)->url($srcPath);
-                        } catch (\Throwable $e) {
-                            $url = '';
-                        }
-                    }
+                if ($fileRow) {
+                    $url = route('papers.files.download', ['paper' => $paper->id, 'file' => $fileRow->id], true);
                 } else {
-                    Storage::disk($srcDisk)->put($outRel, $binaryOut);
-
                     try {
-                        $url = Storage::disk($srcDisk)->url($outRel);
+                        $url = Storage::disk($srcDisk)->url($srcPath);
                     } catch (\Throwable $e) {
-                        $url = $outRel;
+                        $url = '';
                     }
                 }
             } finally {
@@ -533,6 +531,8 @@ class PdfHighlightController extends Controller
                 'raw_url'  => $url,
                 'replaced' => $replace,
             ]);
+        } catch (HttpResponseException $e) {
+            throw $e;
         } catch (\Throwable $e) {
 
             // -----------------------------------------------------

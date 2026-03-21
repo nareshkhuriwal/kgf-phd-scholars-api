@@ -24,7 +24,7 @@ class PaperFileController extends Controller
 
     private function papersSubdir(): string
     {
-        return 'papers/' . now()->format('Y/m');
+        return $this->libraryBlobSubdir();
     }
 
     private function buildStoragePath(string $originalName): string
@@ -99,6 +99,10 @@ class PaperFileController extends Controller
 
         // Always try the upload disk (Azure) first.
         $candidates = [$uploadDisk];
+
+        if ($legacy = $this->azureLegacyDisk()) {
+            $candidates[] = $legacy;
+        }
 
         // Then the disk recorded on the row (if different).
         if (is_string($file->disk) && $file->disk !== '' && $file->disk !== $uploadDisk) {
@@ -444,12 +448,15 @@ class PaperFileController extends Controller
         $mime = $this->normalizeMime($file->mime, $file->original_name);
         $name = $this->contentDispositionFilename($file->original_name);
 
+        // PDFs can be overwritten in place (e.g. highlight apply). Do not allow browser HTTP cache
+        // or reloads will show stale bytes while the blob in storage is already updated.
         $headers = [
             'Content-Type'              => $mime,
             'Content-Disposition'       => 'inline; filename="' . $name . '"',
             'X-Content-Type-Options'    => 'nosniff',
             'Accept-Ranges'             => 'bytes',
-            'Cache-Control'             => 'private, max-age=300',
+            'Cache-Control'             => 'private, no-store, must-revalidate',
+            'Pragma'                    => 'no-cache',
         ];
 
         if (is_int($resolvedSize) && $resolvedSize > 0) {
@@ -496,7 +503,8 @@ class PaperFileController extends Controller
         $headers = [
             'Content-Type'           => $mime,
             'X-Content-Type-Options' => 'nosniff',
-            'Cache-Control'          => 'private, max-age=300',
+            'Cache-Control'          => 'private, no-store, must-revalidate',
+            'Pragma'                 => 'no-cache',
         ];
         if (is_int($resolvedSize) && $resolvedSize > 0) {
             $headers['Content-Length'] = (string) $resolvedSize;

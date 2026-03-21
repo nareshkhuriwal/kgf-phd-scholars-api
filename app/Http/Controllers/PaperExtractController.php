@@ -64,7 +64,9 @@ class PaperExtractController extends Controller
             'temperature' => 0,
         ];
 
-        $res = Http::withToken(config('services.openai.key'))
+        $res = Http::connectTimeout(8)
+            ->timeout(20)
+            ->withToken(config('services.openai.key'))
             ->post('https://api.openai.com/v1/chat/completions', $payload)
             ->throw()
             ->json();

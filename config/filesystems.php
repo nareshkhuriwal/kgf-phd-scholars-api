@@ -12,7 +12,7 @@ return [
     |
     */
 
-    'default' => env('FILESYSTEM_DISK', 'public'),
+    'default' => env('FILESYSTEM_DISK', 'azure'),
 
     /*
     |--------------------------------------------------------------------------
@@ -24,6 +24,36 @@ return [
     |
     */
     'default_upload_disk' => env('PAPERS_UPLOAD_DISK', env('AZURE_STORAGE_DISK', 'azure')),
+
+    /*
+    |--------------------------------------------------------------------------
+    | Scholars container layout (blob virtual folders)
+    |--------------------------------------------------------------------------
+    |
+    | Container: AZURE_STORAGE_CONTAINER (e.g. "scholars")
+    |   - Original / library PDFs: {library_upload_prefix}/Y/m/...   (default prefix: "library")
+    |   - Review working copies:   {review_working_copy_prefix}/{paper_id}/r{n}/... (default: "reviews")
+    |
+    */
+    'library_upload_prefix' => env('LIBRARY_BLOB_PREFIX', 'library'),
+
+    /*
+    |--------------------------------------------------------------------------
+    | Review working copy blob prefix (within the upload disk container)
+    |--------------------------------------------------------------------------
+    */
+    'review_working_copy_prefix' => env('REVIEW_WORKING_COPY_PREFIX', 'reviews'),
+
+    /*
+    |--------------------------------------------------------------------------
+    | Optional second Azure container (library blobs still in "papers", new in "scholars")
+    |--------------------------------------------------------------------------
+    |
+    | Set AZURE_STORAGE_LEGACY_CONTAINER when existing paper_files paths live in another
+    | container than AZURE_STORAGE_CONTAINER (e.g. legacy "papers", primary "scholars").
+    |
+    */
+    'azure_legacy_container' => env('AZURE_STORAGE_LEGACY_CONTAINER'),
 
     /*
     |--------------------------------------------------------------------------
@@ -47,7 +77,14 @@ return [
         'azure' => [
             'driver' => 'azure-storage-blob',
             'connection_string' => env('AZURE_STORAGE_CONNECTION_STRING'),
-            'container' => env('AZURE_STORAGE_CONTAINER', 'papers'),
+            // Container name (e.g. "scholars"). Inside it: library/... originals, review/... working copies.
+            'container' => env('AZURE_STORAGE_CONTAINER', 'scholars'),
+        ],
+
+        'azure_legacy' => [
+            'driver' => 'azure-storage-blob',
+            'connection_string' => env('AZURE_STORAGE_CONNECTION_STRING'),
+            'container' => env('AZURE_STORAGE_LEGACY_CONTAINER') ?: env('AZURE_STORAGE_CONTAINER', 'scholars'),
         ],
 
         // Standard Laravel public disk (needs storage:link → often blocked on cPanel)

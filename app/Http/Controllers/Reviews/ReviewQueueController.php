@@ -7,7 +7,9 @@ use App\Http\Controllers\Concerns\OwnerAuthorizes;
 use App\Http\Requests\Reviews\AddToQueueRequest;
 use App\Http\Resources\PaperSummaryResource;
 use App\Models\Paper;
+use App\Models\Review;
 use App\Models\ReviewQueue;
+use App\Services\ReviewWorkingCopyService;
 use App\Support\ResolvesApiScope;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Log;
@@ -109,6 +111,17 @@ class ReviewQueueController extends Controller
             ['user_id' => $userId, 'paper_id' => $paper->id],
             ['added_at' => now()]
         );
+
+        $review = Review::firstOrCreate(
+            ['paper_id' => $paper->id, 'user_id' => $userId],
+            [
+                'status' => Review::STATUS_DRAFT,
+                'review_sections' => [],
+            ]
+        );
+
+        $paper->loadMissing('files');
+        app(ReviewWorkingCopyService::class)->ensure($review, $paper, $request->user());
 
         Log::info('Paper added to review queue successfully');
 

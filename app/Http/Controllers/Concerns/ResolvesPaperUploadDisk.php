@@ -6,6 +6,16 @@ use RuntimeException;
 
 trait ResolvesPaperUploadDisk
 {
+    /**
+     * Path segment under the Azure container for new library/original uploads (e.g. library/2026/03/...).
+     */
+    protected function libraryBlobSubdir(): string
+    {
+        $p = rtrim((string) config('filesystems.library_upload_prefix', 'library'), '/');
+
+        return $p . '/' . now()->format('Y/m');
+    }
+
     protected function uploadDisk(): string
     {
         $disk = (string) config('filesystems.default_upload_disk', 'azure');
@@ -37,5 +47,21 @@ trait ResolvesPaperUploadDisk
     protected function storageProviderForDisk(?string $disk): string
     {
         return (($disk ?: $this->uploadDisk()) === 'azure') ? 'azure-datalake' : 'filesystem';
+    }
+
+    /**
+     * Second Azure disk when library blobs remain in AZURE_STORAGE_LEGACY_CONTAINER (e.g. "papers")
+     * while AZURE_STORAGE_CONTAINER is "scholars" for new uploads and review copies.
+     */
+    protected function azureLegacyDisk(): ?string
+    {
+        $legacy = env('AZURE_STORAGE_LEGACY_CONTAINER');
+        $main = (string) config('filesystems.disks.azure.container', 'scholars');
+
+        if (! is_string($legacy) || $legacy === '' || $legacy === $main) {
+            return null;
+        }
+
+        return 'azure_legacy';
     }
 }
