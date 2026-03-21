@@ -146,7 +146,8 @@ class EditorUploadController extends Controller
         /**
          * 🌐 Fallback: HTTP fetch (rare)
          */
-        $res = Http::timeout(10)
+        $res = Http::connectTimeout(8)
+            ->timeout(10)
             ->withOptions(['verify' => false])
             ->get($url);
 

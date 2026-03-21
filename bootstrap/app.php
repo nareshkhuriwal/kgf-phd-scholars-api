@@ -22,6 +22,7 @@ return Application::configure(basePath: dirname(__DIR__))
         // Also ensure it's on API routes
         $middleware->api(prepend: [
             \Illuminate\Http\Middleware\HandleCors::class,
+            \App\Http\Middleware\ExtendApiExecutionTime::class,
         ]);
         
         // Register middleware aliases
